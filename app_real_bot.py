@@ -30,6 +30,7 @@ TIMEFRAME = st.sidebar.selectbox("Temporalidad de Análisis", ["15m", "4h"], ind
 UMBRAL = st.sidebar.slider("Umbral de Disparo (%)", min_value=1.0, max_value=10.0, value=5.0, step=0.5)
 MARGEN_USD = st.sidebar.number_input("Margen de Entrada (USD)", min_value=1.0, value=5.0, step=1.0)
 LEVERAGE = st.sidebar.number_input("Apalancamiento (X)", min_value=1, max_value=25, value=10, step=1)
+VOLUMEN_MINIMO = st.sidebar.number_input("Volumen mínimo 24h (USDT)", value=500000, step=100000) # <-- NUEVA LÍNEA (Inicia en 500k)
 TRAILING_PERC = st.sidebar.slider("Trailing Stop (%)", min_value=0.5, max_value=5.0, value=1.5, step=0.1)
 
 # Conexión autorizada a Binance (Lectura comercial / Escritura Testnet)
@@ -147,7 +148,7 @@ if BOT_ENCENDIDO:
             precio_actual = info.get('last', 0)
             
             # Filtro base para asegurar volumen mínimo de 2 millones en el par escaneado
-            if volumen < 2000000 or precio_actual == 0:
+            if volumen < VOLUMEN_MINIMO or precio_actual == 0: # <-- Ahora usa lo que tú pongas en la pantalla
                 continue
 
             # Evaluar quiebre del umbral configurado
