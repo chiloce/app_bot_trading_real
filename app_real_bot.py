@@ -30,7 +30,7 @@ TIMEFRAME = st.sidebar.selectbox("Temporalidad de Análisis", ["15m", "4h"], ind
 UMBRAL = st.sidebar.slider("Umbral de Disparo (%)", min_value=1.0, max_value=10.0, value=5.0, step=0.5)
 MARGEN_USD = st.sidebar.number_input("Margen de Entrada (USD)", min_value=1.0, value=5.0, step=1.0)
 LEVERAGE = st.sidebar.number_input("Apalancamiento (X)", min_value=1, max_value=25, value=10, step=1)
-VOLUMEN_MINIMO = st.sidebar.number_input("Volumen mínimo 24h (USDT)", value=500000, step=100000) # <-- NUEVA LÍNEA (Inicia en 500k)
+VOLUMEN_MINIMO = st.sidebar.number_input("Volumen mínimo 24h (USDT)", value=100000, step=50000)
 TRAILING_PERC = st.sidebar.slider("Trailing Stop (%)", min_value=0.5, max_value=5.0, value=1.5, step=0.1)
 
 # =====================================================================
@@ -42,31 +42,87 @@ exchange = ccxt.binance({
     'enableRateLimit': True,
     'options': {
         'defaultType': 'future',
-        'adjustForTimeDifference': True # Corrige el desfase de reloj del servidor
+        'adjustForTimeDifference': True
     }
 })
 
-# Forzar operaciones y órdenes exclusivamente en el entorno de pruebas
 exchange.set_sandbox_mode(True)
-
-# TRUCO TÁCTICO PARA LA NUBE:
-# Forzamos a que la lectura pública de precios sea en la API comercial estable,
-# pero las funciones privadas (crear órdenes, apalancamiento) apunten a la Testnet.
 exchange.urls['api']['public'] = 'https://fapi.binance.com/fapi/v1'
 
 # Contenedores visuales en la interfaz
 metrica_estado = st.empty()
 monitor_operacion = st.empty()
 
+if BOT_ENCENDIDO:
+    metrica_estado.success(f"🟢 BOT ENCENDIDO | Escaneando el mercado en [{TIMEFRAME}] esperando un {UMBRAL}%...")
+else:
+    metrica_estado.warning("🔴 BOT APAGADO | El modo de trading automático está desactivado.")
+    monitor_operacion.info("Enciende el bot en la barra lateral para comenzar a buscar entradas.")
+
+# Variable en caché para verificar si ya estamos dentro de una operación
+if 'en_operacion' not in st.session_state:
+    st.session_state.en_operacion = False
+if 'detalles_operacion' not in st.session_state:
+    st.session_state.detalles_operacion = {}
+
 # =====================================================================
-# MOTOR DE ESCANEO CONTINUO (CORREGIDO Y ADAPTADO)
+# FUNCIONES DE TRADING
+# =====================================================================
+def calcular_cantidad_contratos(symbol, precio_actual):
+    try:
+        valor_posicion_usd = MARGEN_USD * LEVERAGE
+        cantidad_bruta = valor_posicion_usd / precio_actual
+        exchange.load_markets()
+        cantidad_ajustada = exchange.amount_to_precision(symbol, cantidad_bruta)
+        return float(cantidad_ajustada)
+    except Exception as e:
+        print(f"Error calculando contratos: {e}")
+        return 0
+
+def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
+    try:
+        cantidad = calcular_cantidad_contratos(symbol, precio_actual)
+        if cantidad == 0: return False
+        
+        # 1. Forzar el Apalancamiento en el Exchange
+        exchange.set_leverage(int(LEVERAGE), symbol)
+        time.sleep(0.5)
+        
+        # 2. Lanzar Orden de Entrada a Mercado
+        lado_entrada = 'buy' if direccion == 'LONG' else 'sell'
+        orden_entrada = exchange.create_market_order(symbol, lado_entrada, cantidad)
+        
+        # 3. Lanzar Orden de Trailing Stop para la Salida
+        lado_salida = 'sell' if direccion == 'LONG' else 'buy'
+        params_trailing = {
+            'callbackRate': TRAILING_PERC,
+            'reduceOnly': True
+        }
+        orden_trailing = exchange.create_order(symbol, 'TRAILING_STOP_MARKET', lado_salida, cantidad, params=params_trailing)
+        
+        # Guardar estado local
+        st.session_state.detalles_operacion = {
+            "Par": symbol.split(':')[0],
+            "Dirección": direccion,
+            "Precio Entrada": precio_actual,
+            "Cantidad": cantidad,
+            "Valor Nominal": f"${MARGEN_USD * LEVERAGE} USD"
+        }
+        
+        msg = f"🛒 ¡POSICIÓN ABIERTA AUTOMÁTICAMENTE!\n\nPar: {symbol.split(':')[0]}\nDirección: {direccion}\nPrecio: {precio_actual} USDT\nContratos: {cantidad}\n🎯 Trailing Stop colocado al {TRAILING_PERC}%"
+        enviar_alerta(msg)
+        return True
+    except Exception as e:
+        enviar_alerta(f"❌ Fallo al ejecutar trade en Binance: {e}")
+        return False
+
+# =====================================================================
+# MOTOR DE ESCANEO CONTINUO (CORREGIDO)
 # =====================================================================
 if BOT_ENCENDIDO:
-    # Si localmente creemos que estamos en operación, verificar en Binance si sigue abierta
     if st.session_state.en_operacion:
         try:
             par_activo = st.session_state.detalles_operacion.get("Par")
-            # Adaptar formato para la consulta de posiciones en futuros perpetuos
             if ":" not in par_activo:
                 par_activo = f"{par_activo}:USDT"
                 
@@ -77,7 +133,6 @@ if BOT_ENCENDIDO:
         except Exception as e:
             print(f"Error verificando estado de la posición: {e}")
 
-    # Mostrar visualmente si hay una operación activa
     if st.session_state.en_operacion:
         df_op = pd.DataFrame([st.session_state.detalles_operacion])
         monitor_operacion.dataframe(df_op, use_container_width=True)
@@ -85,15 +140,13 @@ if BOT_ENCENDIDO:
         monitor_operacion.info("Vigilando el mercado... Ninguna operación abierta en este momento.")
 
     try:
-        # Escaneo masivo de los tickers comerciales
         tickers = exchange.fetch_tickers()
         
         for symbol, info in tickers.items():
-            # Evitar buscar si ya estamos dentro de una operación
             if st.session_state.en_operacion:
                 break
                 
-            # Filtrar solo pares que operen contra USDT (ej: BTC/USDT o BTC/USDT:USDT)
+            # CORRECCIÓN: Filtra cualquier par con USDT de forma segura
             if not ('USDT' in symbol):
                 continue
                 
@@ -101,20 +154,17 @@ if BOT_ENCENDIDO:
             volumen = info.get('quoteVolume', 0)
             precio_actual = info.get('last', 0)
             
-            # Filtro de volumen dinámico de la barra lateral
             if volumen < VOLUMEN_MINIMO or precio_actual == 0:
                 continue
 
-            # Evaluar quiebre del umbral configurado
             direccion = None
             if variacion >= UMBRAL:
                 direccion = "LONG"
             elif variacion <= -UMBRAL:
                 direccion = "SHORT"
 
-            # DISPARAR ENTRADA REAL (Formateando el par correctamente para Futuros)
             if direccion and not st.session_state.en_operacion:
-                # Asegurar formato estricto de CCXT Futuros Perpetuos para la orden (ej: BTC/USDT:USDT)
+                # CORRECCIÓN: Convierte 'BTC/USDT' a 'BTC/USDT:USDT' para que la orden pase en futuros
                 symbol_futuros = symbol if ":" in symbol else f"{symbol}:{symbol.split('/')[1]}"
                 
                 if abrir_posicion_con_trailing(symbol_futuros, direccion, precio_actual):
@@ -124,6 +174,5 @@ if BOT_ENCENDIDO:
     except Exception as e:
         print(f"Error en bucle de ejecución: {e}")
 
-    # Ciclo de consulta cada 8 segundos
     time.sleep(8)
     st.rerun()
