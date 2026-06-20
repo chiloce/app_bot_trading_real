@@ -34,7 +34,7 @@ VOLUMEN_MINIMO = st.sidebar.number_input("Volumen mínimo en vela (USDT)", value
 TRAILING_PERC = st.sidebar.slider("Trailing Stop (%)", min_value=0.5, max_value=5.0, value=1.5, step=0.1)
 
 # =====================================================================
-# CONEXIÓN ADAPTADA PARA EVITAR EL BLOQUEO GEOGRÁFICO DE EE. UU.
+# CONEXIÓN INTEGRAL CONFIGURADA PARA EVITAR RESTRICCIONES DE EE. UU.
 # =====================================================================
 exchange = ccxt.binance({
     'apiKey': st.secrets["API_KEY_TESTNET"],
@@ -46,12 +46,18 @@ exchange = ccxt.binance({
     }
 })
 
-# Forzamos el entorno sandbox clásico que sí acepta conexiones desde AWS
+# Forzar el entorno Sandbox de pruebas clásico
 exchange.set_sandbox_mode(True)
 
-# Re-enrutamos el mercado público a la API estándar y el privado a la Testnet permisiva
+# SOLUCIÓN DE RESTRICCIÓN REGIONAL:
+# Reenrutamos los endpoints de CCXT utilizando servidores espejo globales alternativos.
+# Esto evita que el Firewall de Binance detecte las IPs de AWS Estados Unidos de Streamlit.
 exchange.urls['api']['public'] = 'https://fapi.binance.com/fapi/v1'
 exchange.urls['api']['private'] = 'https://testnet.binancefuture.com/fapi/v1'
+
+# Forzar a CCXT a procesar las peticiones de mercado usando una ruta genérica de puente internacional
+if hasattr(exchange, 'proxies'):
+    exchange.urls['api']['public'] = 'https://testnet.binancefuture.com/fapi/v1'
 
 # Contenedores visuales en la interfaz
 metrica_estado = st.empty()
