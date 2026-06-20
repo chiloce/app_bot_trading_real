@@ -33,14 +33,26 @@ LEVERAGE = st.sidebar.number_input("Apalancamiento (X)", min_value=1, max_value=
 VOLUMEN_MINIMO = st.sidebar.number_input("Volumen mínimo 24h (USDT)", value=500000, step=100000) # <-- NUEVA LÍNEA (Inicia en 500k)
 TRAILING_PERC = st.sidebar.slider("Trailing Stop (%)", min_value=0.5, max_value=5.0, value=1.5, step=0.1)
 
-# Conexión autorizada a Binance (Lectura comercial / Escritura Testnet)
+# =====================================================================
+# CONEXIÓN OPTIMIZADA AL EXCHANGE
+# =====================================================================
 exchange = ccxt.binance({
     'apiKey': st.secrets["API_KEY_TESTNET"],
     'secret': st.secrets["SECRET_KEY_TESTNET"],
     'enableRateLimit': True,
-    'options': {'defaultType': 'future', 'adjustForTimeDifference': True}
+    'options': {
+        'defaultType': 'future',
+        'adjustForTimeDifference': True # Corrige el desfase de reloj del servidor
+    }
 })
+
+# Forzar operaciones y órdenes exclusivamente en el entorno de pruebas
 exchange.set_sandbox_mode(True)
+
+# TRUCO TÁCTICO PARA LA NUBE:
+# Forzamos a que la lectura pública de precios sea en la API comercial estable,
+# pero las funciones privadas (crear órdenes, apalancamiento) apunten a la Testnet.
+exchange.urls['api']['public'] = 'https://fapi.binance.com/fapi/v1'
 
 # Contenedores visuales en la interfaz
 metrica_estado = st.empty()
