@@ -27,14 +27,13 @@ st.subheader("Entradas automáticas con Trailing Stop guiado")
 st.sidebar.header("⚙️ Parámetros de Trading")
 BOT_ENCENDIDO = st.sidebar.toggle("🤖 ACTIVAR BOT DE TRADING", value=False)
 TIMEFRAME = st.sidebar.selectbox("Temporalidad de Análisis", ["15m", "4h"], index=0)
-UMBRAL = st.sidebar.slider("Umbral de Disparo (%)", min_value=1.0, max_value=10.0, value=5.0, step=0.5)
+UMBRAL = st.sidebar.slider("Umbral de Disparo (%)", min_value=0.1, max_value=5.0, value=1.0, step=0.1) # Bajado mínimo a 0.1% para pruebas rápidas
 MARGEN_USD = st.sidebar.number_input("Margen de Entrada (USD)", min_value=1.0, value=5.0, step=1.0)
 LEVERAGE = st.sidebar.number_input("Apalancamiento (X)", min_value=1, max_value=25, value=10, step=1)
-VOLUMEN_MINIMO = st.sidebar.number_input("Volumen mínimo 24h (USDT)", value=100000, step=50000)
 TRAILING_PERC = st.sidebar.slider("Trailing Stop (%)", min_value=0.5, max_value=5.0, value=1.5, step=0.1)
 
 # =====================================================================
-# CONEXIÓN OPTIMIZADA AL EXCHANGE
+# CONEXIÓN AL EXCHANGE (MODO TESTNET COMPLETO)
 # =====================================================================
 exchange = ccxt.binance({
     'apiKey': st.secrets["API_KEY_TESTNET"],
@@ -45,21 +44,23 @@ exchange = ccxt.binance({
         'adjustForTimeDifference': True
     }
 })
-
 exchange.set_sandbox_mode(True)
-exchange.urls['api']['public'] = 'https://fapi.binance.com/fapi/v1'
+
+# Forzar rutas nativas de Testnet para evitar desajustes de datos comerciales
+exchange.urls['api']['public'] = 'https://testnet.binancefuture.com/fapi/v1'
+exchange.urls['api']['private'] = 'https://testnet.binancefuture.com/fapi/v1'
 
 # Contenedores visuales en la interfaz
 metrica_estado = st.empty()
 monitor_operacion = st.empty()
+consola_errores = st.empty()
 
 if BOT_ENCENDIDO:
-    metrica_estado.success(f"🟢 BOT ENCENDIDO | Escaneando el mercado en [{TIMEFRAME}] esperando un {UMBRAL}%...")
+    metrica_estado.success(f"🟢 BOT ENCENDIDO | Analizando velas de [{TIMEFRAME}] esperando movimiento de {UMBRAL}%...")
 else:
     metrica_estado.warning("🔴 BOT APAGADO | El modo de trading automático está desactivado.")
     monitor_operacion.info("Enciende el bot en la barra lateral para comenzar a buscar entradas.")
 
-# Variable en caché para verificar si ya estamos dentro de una operación
 if 'en_operacion' not in st.session_state:
     st.session_state.en_operacion = False
 if 'detalles_operacion' not in st.session_state:
@@ -76,7 +77,7 @@ def calcular_cantidad_contratos(symbol, precio_actual):
         cantidad_ajustada = exchange.amount_to_precision(symbol, cantidad_bruta)
         return float(cantidad_ajustada)
     except Exception as e:
-        print(f"Error calculando contratos: {e}")
+        consola_errores.error(f"⚠️ Error calculando tamaño de posición: {e}")
         return 0
 
 def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
@@ -84,15 +85,16 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         cantidad = calcular_cantidad_contratos(symbol, precio_actual)
         if cantidad == 0: return False
         
-        # 1. Forzar el Apalancamiento en el Exchange
+        # 1. Configurar el Apalancamiento en la Testnet
         exchange.set_leverage(int(LEVERAGE), symbol)
         time.sleep(0.5)
         
-        # 2. Lanzar Orden de Entrada a Mercado
+        # 2. Lanzar Orden de Entrada
         lado_entrada = 'buy' if direccion == 'LONG' else 'sell'
         orden_entrada = exchange.create_market_order(symbol, lado_entrada, cantidad)
+        time.sleep(0.5)
         
-        # 3. Lanzar Orden de Trailing Stop para la Salida
+        # 3. Lanzar Orden de Trailing Stop
         lado_salida = 'sell' if direccion == 'LONG' else 'buy'
         params_trailing = {
             'callbackRate': TRAILING_PERC,
@@ -109,22 +111,25 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
             "Valor Nominal": f"${MARGEN_USD * LEVERAGE} USD"
         }
         
-        msg = f"🛒 ¡POSICIÓN ABIERTA AUTOMÁTICAMENTE!\n\nPar: {symbol.split(':')[0]}\nDirección: {direccion}\nPrecio: {precio_actual} USDT\nContratos: {cantidad}\n🎯 Trailing Stop colocado al {TRAILING_PERC}%"
+        msg = f"🛒 ¡POSICIÓN ABIERTA EN TESTNET!\n\nPar: {symbol.split(':')[0]}\nDirección: {direccion}\nPrecio: {precio_actual} USDT\nContratos: {cantidad}\n🎯 Trailing Stop colocado al {TRAILING_PERC}%"
         enviar_alerta(msg)
         return True
     except Exception as e:
-        enviar_alerta(f"❌ Fallo al ejecutar trade en Binance: {e}")
+        # MUESTRA EL ERROR REAL EN PANTALLA SI BINANCE RECHAZA LA ORDEN
+        consola_errores.error(f"❌ Binance Testnet rechazó la orden: {e}")
         return False
 
 # =====================================================================
-# MOTOR DE ESCANEO CONTINUO (CORREGIDO)
+# MOTOR DE ESCANEO CONTINUO (EN VELAS REALES)
 # =====================================================================
 if BOT_ENCENDIDO:
+    # Lista de monedas principales con alta liquidez asegurada en Testnet
+    PARES_A_REVISAR = ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", "BNB/USDT:USDT", "XRP/USDT:USDT"]
+
     if st.session_state.en_operacion:
         try:
             par_activo = st.session_state.detalles_operacion.get("Par")
-            if ":" not in par_activo:
-                par_activo = f"{par_activo}:USDT"
+            if ":" not in par_activo: par_activo = f"{par_activo}:USDT"
                 
             posiciones = exchange.fetch_positions(symbols=[par_activo])
             if posiciones and float(posiciones[0]['info'].get('positionAmt', 0)) == 0:
@@ -137,26 +142,22 @@ if BOT_ENCENDIDO:
         df_op = pd.DataFrame([st.session_state.detalles_operacion])
         monitor_operacion.dataframe(df_op, use_container_width=True)
     else:
-        monitor_operacion.info("Vigilando el mercado... Ninguna operación abierta en este momento.")
+        monitor_operacion.info("Vigilando los pares principales de la Testnet... Esperando movimiento agresivo.")
 
     try:
-        tickers = exchange.fetch_tickers()
-        
-        for symbol, info in tickers.items():
+        # Escaneo de velas dinámicas
+        for symbol in PARES_A_REVISAR:
             if st.session_state.en_operacion:
                 break
                 
-            # CORRECCIÓN: Filtra cualquier par con USDT de forma segura
-            if not ('USDT' in symbol):
-                continue
-                
-            variacion = info.get('percentage', 0)
-            volumen = info.get('quoteVolume', 0)
-            precio_actual = info.get('last', 0)
+            velas = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=2)
+            if len(velas) < 2: continue
             
-            if volumen < VOLUMEN_MINIMO or precio_actual == 0:
-                continue
-
+            vela_actual = velas[-1]
+            precio_apertura = vela_actual[1]
+            precio_actual = vela_actual[4]
+            variacion = ((precio_actual - precio_apertura) / precio_apertura) * 100
+            
             direccion = None
             if variacion >= UMBRAL:
                 direccion = "LONG"
@@ -164,15 +165,12 @@ if BOT_ENCENDIDO:
                 direccion = "SHORT"
 
             if direccion and not st.session_state.en_operacion:
-                # CORRECCIÓN: Convierte 'BTC/USDT' a 'BTC/USDT:USDT' para que la orden pase en futuros
-                symbol_futuros = symbol if ":" in symbol else f"{symbol}:{symbol.split('/')[1]}"
-                
-                if abrir_posicion_con_trailing(symbol_futuros, direccion, precio_actual):
+                if abrir_posicion_con_trailing(symbol, direccion, precio_actual):
                     st.session_state.en_operacion = True
                     st.rerun()
 
     except Exception as e:
-        print(f"Error en bucle de ejecución: {e}")
+        consola_errores.error(f"❌ Error leyendo velas de Binance: {e}")
 
-    time.sleep(8)
+    time.sleep(6)
     st.rerun()
