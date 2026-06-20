@@ -20,20 +20,21 @@ def enviar_alerta(mensaje):
 # INTERFAZ WEB (STREAMLIT)
 # =====================================================================
 st.set_page_config(page_title="Crypto Execution Bot", layout="wide")
-st.title("⚡ Bot de Ejecución Automatizada (Testnet)")
+st.title("⚡ Bot de Ejecución Automatizada (Demo Trading)")
 st.subheader("Entradas automáticas con Trailing Stop guiado")
 
 # CONFIGURACIÓN DE LA BARRA LATERAL
 st.sidebar.header("⚙️ Parámetros de Trading")
 BOT_ENCENDIDO = st.sidebar.toggle("🤖 ACTIVAR BOT DE TRADING", value=False)
 TIMEFRAME = st.sidebar.selectbox("Temporalidad de Análisis", ["15m", "4h"], index=0)
-UMBRAL = st.sidebar.slider("Umbral de Disparo (%)", min_value=0.1, max_value=5.0, value=1.0, step=0.1) # Bajado mínimo a 0.1% para pruebas rápidas
+UMBRAL = st.sidebar.slider("Umbral de Disparo (%)", min_value=0.1, max_value=5.0, value=1.0, step=0.1)
 MARGEN_USD = st.sidebar.number_input("Margen de Entrada (USD)", min_value=1.0, value=5.0, step=1.0)
 LEVERAGE = st.sidebar.number_input("Apalancamiento (X)", min_value=1, max_value=25, value=10, step=1)
+VOLUMEN_MINIMO = st.sidebar.number_input("Volumen mínimo en vela (USDT)", value=100000, step=50000) # <-- VOLVEMOS A AGREGARLO
 TRAILING_PERC = st.sidebar.slider("Trailing Stop (%)", min_value=0.5, max_value=5.0, value=1.5, step=0.1)
 
 # =====================================================================
-# CONEXIÓN AL EXCHANGE (MODO TESTNET COMPLETO)
+# CONEXIÓN AL ENTORNO MODERNO DE DEMO TRADING DE BINANCE
 # =====================================================================
 exchange = ccxt.binance({
     'apiKey': st.secrets["API_KEY_TESTNET"],
@@ -44,11 +45,10 @@ exchange = ccxt.binance({
         'adjustForTimeDifference': True
     }
 })
-exchange.set_sandbox_mode(True)
 
-# Forzar rutas nativas de Testnet para evitar desajustes de datos comerciales
-exchange.urls['api']['public'] = 'https://testnet.binancefuture.com/fapi/v1'
-exchange.urls['api']['private'] = 'https://testnet.binancefuture.com/fapi/v1'
+# Forzar el redireccionamiento a las URLs de Demo Trading Oficial (DAPI)
+exchange.urls['api']['public'] = 'https://dapi.binance.com/dapi/v1'
+exchange.urls['api']['private'] = 'https://dapi.binance.com/dapi/v1'
 
 # Contenedores visuales en la interfaz
 metrica_estado = st.empty()
@@ -56,7 +56,7 @@ monitor_operacion = st.empty()
 consola_errores = st.empty()
 
 if BOT_ENCENDIDO:
-    metrica_estado.success(f"🟢 BOT ENCENDIDO | Analizando velas de [{TIMEFRAME}] esperando movimiento de {UMBRAL}%...")
+    metrica_estado.success(f"🟢 BOT ENCENDIDO | Analizando [{TIMEFRAME}] esperando {UMBRAL}% y Vol > {VOLUMEN_MINIMO} USDT...")
 else:
     metrica_estado.warning("🔴 BOT APAGADO | El modo de trading automático está desactivado.")
     monitor_operacion.info("Enciende el bot en la barra lateral para comenzar a buscar entradas.")
@@ -85,22 +85,22 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         cantidad = calcular_cantidad_contratos(symbol, precio_actual)
         if cantidad == 0: return False
         
-        # 1. Configurar el Apalancamiento en la Testnet
+        # 1. Configurar Apalancamiento
         exchange.set_leverage(int(LEVERAGE), symbol)
         time.sleep(0.5)
         
-        # 2. Lanzar Orden de Entrada
+        # 2. Orden de Entrada a Mercado
         lado_entrada = 'buy' if direccion == 'LONG' else 'sell'
-        orden_entrada = exchange.create_market_order(symbol, lado_entrada, cantidad)
+        orden_entrada = exchange.create_market_order(symbol, lado_entrada, quantity=cantidad)
         time.sleep(0.5)
         
-        # 3. Lanzar Orden de Trailing Stop
+        # 3. Orden de Trailing Stop Relativa
         lado_salida = 'sell' if direccion == 'LONG' else 'buy'
         params_trailing = {
             'callbackRate': TRAILING_PERC,
             'reduceOnly': True
         }
-        orden_trailing = exchange.create_order(symbol, 'TRAILING_STOP_MARKET', lado_salida, cantidad, params=params_trailing)
+        orden_trailing = exchange.create_order(symbol, 'TRAILING_STOP_MARKET', lado_salida, quantity=cantidad, params=params_trailing)
         
         # Guardar estado local
         st.session_state.detalles_operacion = {
@@ -111,19 +111,18 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
             "Valor Nominal": f"${MARGEN_USD * LEVERAGE} USD"
         }
         
-        msg = f"🛒 ¡POSICIÓN ABIERTA EN TESTNET!\n\nPar: {symbol.split(':')[0]}\nDirección: {direccion}\nPrecio: {precio_actual} USDT\nContratos: {cantidad}\n🎯 Trailing Stop colocado al {TRAILING_PERC}%"
+        msg = f"🛒 ¡POSICIÓN ABIERTA EN DEMO TRADING!\n\nPar: {symbol.split(':')[0]}\nDirección: {direccion}\nPrecio: {precio_actual} USDT\n🎯 Trailing Stop colocado al {TRAILING_PERC}%"
         enviar_alerta(msg)
         return True
     except Exception as e:
-        # MUESTRA EL ERROR REAL EN PANTALLA SI BINANCE RECHAZA LA ORDEN
-        consola_errores.error(f"❌ Binance Testnet rechazó la orden: {e}")
+        consola_errores.error(f"❌ Binance Demo rechazó la orden: {e}")
         return False
 
 # =====================================================================
-# MOTOR DE ESCANEO CONTINUO (EN VELAS REALES)
+# MOTOR DE ESCANEO CONTINUO
 # =====================================================================
 if BOT_ENCENDIDO:
-    # Lista de monedas principales con alta liquidez asegurada en Testnet
+    # Lista de monedas principales de alta liquidez en la Demo
     PARES_A_REVISAR = ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", "BNB/USDT:USDT", "XRP/USDT:USDT"]
 
     if st.session_state.en_operacion:
@@ -142,10 +141,10 @@ if BOT_ENCENDIDO:
         df_op = pd.DataFrame([st.session_state.detalles_operacion])
         monitor_operacion.dataframe(df_op, use_container_width=True)
     else:
-        monitor_operacion.info("Vigilando los pares principales de la Testnet... Esperando movimiento agresivo.")
+        monitor_operacion.info("Vigilando los pares principales... Esperando condiciones de volumen y porcentaje.")
 
     try:
-        # Escaneo de velas dinámicas
+        # Escaneo de velas
         for symbol in PARES_A_REVISAR:
             if st.session_state.en_operacion:
                 break
@@ -156,7 +155,13 @@ if BOT_ENCENDIDO:
             vela_actual = velas[-1]
             precio_apertura = vela_actual[1]
             precio_actual = vela_actual[4]
+            volumen_vela = vela_actual[5] * precio_actual # Cálculo aproximado del volumen de la vela en USDT
+            
             variacion = ((precio_actual - precio_apertura) / precio_apertura) * 100
+            
+            # FILTRO DE VOLUMEN INTEGRADO EN EL ESCANEO DE VELAS
+            if volumen_vela < VOLUMEN_MINIMO:
+                continue
             
             direccion = None
             if variacion >= UMBRAL:
@@ -170,7 +175,7 @@ if BOT_ENCENDIDO:
                     st.rerun()
 
     except Exception as e:
-        consola_errores.error(f"❌ Error leyendo velas de Binance: {e}")
+        consola_errores.error(f"❌ Error leyendo mercado: {e}")
 
     time.sleep(6)
     st.rerun()
