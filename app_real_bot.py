@@ -21,7 +21,7 @@ def enviar_alerta(mensaje):
 # =====================================================================
 st.set_page_config(page_title="Crypto Execution Bot (BingX)", layout="wide")
 st.title("⚡ Bot de Ejecución Automatizada Multi-Trade (BingX)")
-st.subheader("Sincronización en Vivo y Trailing Stop por Código (Máx 3 Trades)")
+st.subheader("Sincronización en Vivo y Control de Salidas Manuales (Máx 3 Trades)")
 
 # CONFIGURACIÓN DE LA BARRA LATERAL
 st.sidebar.header("⚙️ Parámetros de Trading")
@@ -68,7 +68,7 @@ p3 = panel_balance[2].empty()
 
 st.markdown("---")
 st.subheader("📊 Panel de Operaciones Activas (Sincronizado con Exchange)")
-monitor_operacion = st.empty()
+monitor_operacion = st.container() # Cambiado a contenedor estático para la interacción
 
 st.markdown("---")
 st.subheader("🔍 Monitoreo del Mercado en Vivo")
@@ -92,10 +92,11 @@ except Exception as e:
     print(f"Error cargando balance VST: {e}")
 
 if BOT_ENCENDIDO:
-    metrica_estado.success(f"🟢 BOT ENCENDIDO | Escaneando e Importando posiciones...")
+    metrica_estado.success(f"🟢 BOT ENCENDIDO | Sincronizando y listo para operar...")
 else:
     metrica_estado.warning("🔴 BOT APAGADO | El modo de trading automático está desactivado.")
-    monitor_operacion.info("Enciende el bot en la barra lateral para comenzar a buscar entradas.")
+    with monitor_operacion:
+        st.info("Enciende el bot en la barra lateral para comenzar a buscar entradas.")
 
 # =====================================================================
 # FUNCIONES DE TRADING (BINGX)
@@ -157,15 +158,11 @@ if BOT_ENCENDIDO:
     PARES_A_REVISAR = ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", "BNB/USDT:USDT", "XRP/USDT:USDT"]
     dict_sincronizado = {}
 
-    # 1. ETAPA DE IMPORTACIÓN REAL DESDE BINGX (CORREGIDA PARA LEER AISLADO/CRUZADO)
+    # 1. ETAPA DE IMPORTACIÓN REAL DESDE BINGX
     try:
         posiciones_exchange = exchange.fetch_positions()
-        
         for pos in posiciones_exchange:
-            info = pos.get('info', {})
-            # Flexibilizamos el filtro para que lea cualquier posición activa con contratos > 0 en la Testnet
             cantidad_ex = float(pos.get('contracts', 0))
-            
             if cantidad_ex > 0:
                 symbol_ex = pos.get('symbol')
                 token_ex = symbol_ex.split('/')[0]
@@ -193,9 +190,7 @@ if BOT_ENCENDIDO:
                             "Trailing Stop Activo": float(stop_inicial),
                             "Precio Máximo Alcanzado": float(precio_actual_ex)
                         }
-                        
         st.session_state.operaciones_activas = dict_sincronizado
-
     except Exception as e:
         print(f"Error en etapa de sincronización: {e}")
 
@@ -256,15 +251,60 @@ if BOT_ENCENDIDO:
         except Exception as e:
             print(f"Error en monitor de trailing: {e}")
 
-    # PINTAR TABLA DE OPERACIONES ACTIVAS
-    if st.session_state.operaciones_activas:
-        df_op = pd.DataFrame(st.session_state.operaciones_activas.values())
-        columnas_orden = ["Par", "Dirección", "Precio Entrada", "Cantidad", "Valor Nominal", "Trailing Stop Activo", "Precio Máximo Alcanzado"]
-        monitor_operacion.dataframe(df_op[columnas_orden], use_container_width=True)
-    else:
-        monitor_operacion.info("Sincronizado. Sin posiciones abiertas en BingX en este momento.")
+    # RENDEREAR PANEL DE OPERACIONES ACTIVAS CON BOTÓN DE ACCIÓN MANUAL
+    with monitor_operacion:
+        if st.session_state.operaciones_activas:
+            df_op = pd.DataFrame(st.session_state.operaciones_activas.values())
+            # Agregamos una columna virtual de control booleana
+            df_op["Cerrar Trade"] = False
+            columnas_orden = ["Par", "Dirección", "Precio Entrada", "Cantidad", "Valor Nominal", "Trailing Stop Activo", "Precio Máximo Alcanzado", "Cerrar Trade"]
+            
+            # Usamos data_editor para habilitar la casilla interactiva tipo botón
+            evento_cierre = st.data_editor(
+                df_op[columnas_orden],
+                column_config={
+                    "Cerrar Trade": st.column_config.CheckboxColumn(
+                        "Cerrar de Emergencia",
+                        help="Haz clic para ejecutar un Cierre Flash instantáneo a mercado",
+                        default=False,
+                    )
+                },
+                disabled=["Par", "Dirección", "Precio Entrada", "Cantidad", "Valor Nominal", "Trailing Stop Activo", "Precio Máximo Alcanzado"],
+                use_container_width=True,
+                key="editor_posiciones"
+            )
+            
+            # DETECTAR SI EL USUARIO PRESIONÓ LA CASILLA DE CIERRE
+            for i, row in evento_cierre.iterrows():
+                if row["Cerrar Trade"] == True:
+                    token_a_cerrar = row["Par"]
+                    op_detalles = st.session_state.operaciones_activas[token_a_cerrar]
+                    symbol_cierre = op_detalles["Symbol_Completo"]
+                    lado_cierre = 'sell' if op_detalles["Dirección"] == 'LONG' else 'buy'
+                    
+                    try:
+                        # 1. Mandamos la orden inmediata a BingX
+                        exchange.create_market_order(
+                            symbol_cierre, 
+                            lado_cierre, 
+                            amount=op_detalles["Cantidad"], 
+                            params={'marginType': 'VST', 'positionSide': op_detalles["Dirección"]}
+                        )
+                        # 2. Borramos de la memoria
+                        del st.session_state.operaciones_activas[token_a_cerrar]
+                        # 3. Registramos en el historial local
+                        st.session_state.historial_trades.append({
+                            "Fecha/Hora": time.strftime("%Y-%m-%d %H:%M:%S"), "Par": token_a_cerrar, "Dirección": op_detalles["Dirección"],
+                            "Precio Entrada": op_detalles["Precio Entrada"], "Precio Cierre": "Cierre Manual Web", "PnL Estimado": "Manual"
+                        })
+                        enviar_alerta(f"🚨 ¡CIERRE DE EMERGENCIA EJECUTADO MANUALMENTE DESDE EL DASHBOARD EN {token_a_cerrar}!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"No se pudo cerrar la posición: {e}")
+        else:
+            st.info("Sincronizado. Sin posiciones abiertas en BingX en este momento.")
 
-    # 3. ESCANEO GENERAL DE MERCADO (BUSCANDO NUEVAS ENTRADAS)
+    # 3. ESCANEO GENERAL DE MERCADO
     datos_consola = []
     for symbol in PARES_A_REVISAR:
         try:
@@ -272,7 +312,6 @@ if BOT_ENCENDIDO:
             velas = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=2)
             if len(velas) < 2: continue
             
-            # CORREGIDA ESTA LÍNEA CRÍTICA
             vela_actual = velas[-1]
             precio_apertura = vela_actual[1]
             precio_actual = vela_actual[4]
@@ -312,7 +351,7 @@ if st.session_state.historial_trades:
 else:
     tabla_historial.info("Aún no hay operaciones cerradas en esta sesión.")
 
-# REFRESCAR CON SEGURIDAD CADA 5 SEGUNDOS
+# REFRESCAR CADA 5 SEGUNDOS
 if BOT_ENCENDIDO:
     time.sleep(5)
     st.rerun()
