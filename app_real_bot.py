@@ -308,7 +308,7 @@ if BOT_ENCENDIDO:
                     velas = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=2)
                     if len(velas) < 2: continue
                     
-                    vela_actual = ... = velas[-1]
+                    vela_actual = velas[-1]  # <--- Línea corregida aquí
                     precio_apertura_15m = float(vela_actual[1])
                     precio_actual_15m = float(vela_actual[4])
                     variacion_vela_real = ((precio_actual_15m - precio_apertura_15m) / precio_apertura_15m) * 100
