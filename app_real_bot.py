@@ -104,7 +104,7 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         orden_entrada = exchange.create_market_order(symbol, lado_entrada, amount=cantidad, params=params_entrada)
         time.sleep(0.3)
         
-        # 3. Orden de Trailing Stop (Formato Numérico Puro - Request con Debug)
+       # 3. Orden de Trailing Stop (Formato Numérico Puro - Request con Debug)
         lado_salida = 'sell' if direccion == 'LONG' else 'buy'
         
         params_nativos = {
@@ -115,7 +115,7 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
             'price': float(precio_actual),
             'activationPrice': float(precio_actual),
             'callbackRate': str(TRAILING_PERC / 100),
-            'closePosition': True, # Cambiado a booleano puro (True) requerido por el engine
+            'closePosition': True,
             'positionSide': direccion
         }
         
@@ -132,7 +132,20 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
             if hasattr(e, 'feedback'):
                 error_msg = f"{e.feedback}"
             elif hasattr(exchange, 'last_json_response') and exchange.last_json_response:
-                error_msg = f"{exchange.last_json_response}" # <-- ASEGÚRATE DE QUE ESTA LÍNEA TENGA SUS ESPACIOS HACIA LA DERECHA
+                error_msg = f"{exchange.last_json_response}"
             
             consola_errores.error(f"❌ Error detallado en Trailing Stop: {error_msg}")
             return False
+        
+        # Guardamos la información para pintar el cuadro azul estable
+        st.session_state.detalles_operacion = {
+            "Par": symbol.split('/')[0],
+            "Dirección": direccion,
+            "Precio Entrada": f"{precio_actual} USDT",
+            "Cantidad": cantidad,
+            "Valor Nominal": f"${MARGEN_USD * LEVERAGE} USD"
+        }
+        
+        msg = f"🛒 ¡POSICIÓN ABIERTA EN BINGX!\n\nPar: {symbol.split('/')[0]}\nDirección: {direccion}\nPrecio: {precio_actual} USDT\n🎯 Trailing Stop colocado al {TRAILING_PERC}%"
+        enviar_alerta(msg)
+        return True
