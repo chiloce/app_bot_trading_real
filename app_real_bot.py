@@ -104,7 +104,7 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         orden_entrada = exchange.create_market_order(symbol, lado_entrada, amount=cantidad, params=params_entrada)
         time.sleep(0.3)
         
-       # 3. Orden de Trailing Stop (Formato Numérico Puro - Request con Debug)
+        # 3. Orden de Trailing Stop (Formato Numérico Puro - Request con Debug)
         lado_salida = 'sell' if direccion == 'LONG' else 'buy'
         
         params_nativos = {
@@ -127,7 +127,6 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
                 params=params_nativos
             )
         except Exception as e:
-            # Si ccxt falla internamente, extraemos la respuesta cruda de BingX
             error_msg = str(e)
             if hasattr(e, 'feedback'):
                 error_msg = f"{e.feedback}"
@@ -137,7 +136,7 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
             consola_errores.error(f"❌ Error detallado en Trailing Stop: {error_msg}")
             return False
         
-        # Guardamos la información para pintar el cuadro azul estable
+        # Guardar la información para pintar el cuadro azul estable
         st.session_state.detalles_operacion = {
             "Par": symbol.split('/')[0],
             "Dirección": direccion,
@@ -149,3 +148,8 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         msg = f"🛒 ¡POSICIÓN ABIERTA EN BINGX!\n\nPar: {symbol.split('/')[0]}\nDirección: {direccion}\nPrecio: {precio_actual} USDT\n🎯 Trailing Stop colocado al {TRAILING_PERC}%"
         enviar_alerta(msg)
         return True
+
+    except Exception as e:
+        error_completo = getattr(e, 'message', str(e))
+        consola_errores.error(f"❌ BingX rechazó la orden principal: {error_completo}")
+        return False
