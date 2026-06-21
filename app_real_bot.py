@@ -92,7 +92,7 @@ except Exception as e:
     print(f"Error cargando balance VST: {e}")
 
 if BOT_ENCENDIDO:
-    metrica_estado.success(f"🟢 BOT ENCENDIDO | Escaneando e Importando posiciones automáticamente...")
+    metrica_estado.success(f"🟢 BOT ENCENDIDO | Escaneando e Importando posiciones...")
 else:
     metrica_estado.warning("🔴 BOT APAGADO | El modo de trading automático está desactivado.")
     monitor_operacion.info("Enciende el bot en la barra lateral para comenzar a buscar entradas.")
@@ -157,29 +157,25 @@ if BOT_ENCENDIDO:
     PARES_A_REVISAR = ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", "BNB/USDT:USDT", "XRP/USDT:USDT"]
     dict_sincronizado = {}
 
-    # 1. ETAPA DE IMPORTACIÓN Y SINCRONIZACIÓN DIRECTA DESDE BINGX
+    # 1. ETAPA DE IMPORTACIÓN REAL DESDE BINGX
     try:
-        # Traemos todas las posiciones de futuros perpetuos de la cuenta
         posiciones_exchange = exchange.fetch_positions()
         
         for pos in posiciones_exchange:
             info = pos.get('info', {})
-            # Validamos estrictamente que la posición corresponda a nuestra cuenta Demo VST y tenga contratos activos
             if info.get('marginType') == 'VST' and float(pos.get('contracts', 0)) > 0:
-                symbol_ex = pos.get('symbol') # Ejemplo: "SOL/USDT:USDT"
-                token_ex = symbol_ex.split('/')[0] # Ejemplo: "SOL"
+                symbol_ex = pos.get('symbol')
+                token_ex = symbol_ex.split('/')[0]
                 
                 if symbol_ex in PARES_A_REVISAR:
-                    direccion_ex = pos.get('side').upper() # LONG o SHORT
+                    direccion_ex = pos.get('side').upper()
                     precio_entrada_ex = float(pos.get('entryPrice'))
                     cantidad_ex = float(pos.get('contracts'))
                     precio_actual_ex = float(pos.get('markPrice', precio_entrada_ex))
                     
-                    # Si la posición ya existía en la memoria local, conservamos su Trailing Stop avanzado
                     if token_ex in st.session_state.operaciones_activas:
                         dict_sincronizado[token_ex] = st.session_state.operaciones_activas[token_ex]
                     else:
-                        # Si es una posición "nueva" o externa, la importamos y le calculamos un stop de protección inicial
                         if direccion_ex == "LONG":
                             stop_inicial = precio_actual_ex * (1 - (TRAILING_PERC / 100))
                         else:
@@ -195,15 +191,14 @@ if BOT_ENCENDIDO:
                             "Trailing Stop Activo": float(stop_inicial),
                             "Precio Máximo Alcanzado": float(precio_actual_ex)
                         }
-                        enviar_alerta(f"📥 Posición externa detectada en {token_ex} ({direccion_ex}). Sincronizada con éxito.")
+                        # SILENCIADA LA ALERTA DE TELEGRAM AQUÍ PARA EVITAR SPAM EN REINICIOS
                         
-        # Reemplazamos la memoria local por la realidad del exchange
         st.session_state.operaciones_activas = dict_sincronizado
 
     except Exception as e:
         print(f"Error en etapa de sincronización: {e}")
 
-    # 2. MONITOR DE TRAILING STOP (ACTUALIZACIÓN Y CIERRES)
+    # 2. MONITOR DE TRAILING STOP
     tokens_abiertos = list(st.session_state.operaciones_activas.keys())
     for token in tokens_abiertos:
         try:
@@ -276,6 +271,7 @@ if BOT_ENCENDIDO:
             velas = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=2)
             if len(velas) < 2: continue
             
+            # CORREGIDA ESTA LÍNEA CRÍTICA
             vela_actual = velas[-1]
             precio_apertura = vela_actual[1]
             precio_actual = vela_actual[4]
