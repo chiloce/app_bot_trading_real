@@ -87,7 +87,7 @@ try:
     
     p1.metric(label="💰 Capital Total (VST)", value=f"{vst_total:,.2f} VST")
     p2.metric(label="🔓 Margen Disponible", value=f"{vst_libre:,.2f} VST")
-    p3.metric(label="🔄 Ranuras Usadas", value=f"{len(st.session_state.operaciones_activas)} de 3 abiertas")
+    p3.metric(label="🔄 Ranuras Usadas", value=f"{len(st.session_state.operaciones_activas)} de 10 abiertas")
 except Exception as e:
     print(f"Error cargando balance VST: {e}")
 
@@ -291,7 +291,7 @@ if BOT_ENCENDIDO:
                     "Variación 24h": variacion, "Volumen": volumen_24h
                 })
                 
-                if token_curr in st.session_state.operaciones_activas or len(st.session_state.operaciones_activas) >= 3:
+                if token_curr in st.session_state.operaciones_activas or len(st.session_state.operaciones_activas) >= 10:
                     continue
                     
                 if volumen_24h < VOLUMEN_MINIMO:
