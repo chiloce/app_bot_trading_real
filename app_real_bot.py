@@ -103,26 +103,29 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         orden_entrada = exchange.create_market_order(symbol, lado_entrada, amount=cantidad, params=params_entrada)
         time.sleep(0.3)
         
-       # 3. Orden de Trailing Stop (Usando el método nativo de CCXT para BingX)
+       # 3. Orden de Trailing Stop (Llamada Directa por Request - Blindada)
         lado_salida = 'sell' if direccion == 'LONG' else 'buy'
         
-        # Estructuramos los parámetros exactos que exige el endpoint nativo de BingX
-        params_trailing = {
-            'callbackRate': str(TRAILING_PERC / 100), # Porcentaje (ej: 0.02)
-            'closePosition': True,                     # Cerrar posición en modo cobertura
-            'positionSide': direccion,                  # 'LONG' o 'SHORT'
-            'activationPrice': str(precio_actual)      # Activación inmediata al precio actual
+        # Preparamos los parámetros nativos exactos en el formato crudo que exige BingX
+        params_nativos = {
+            'symbol': symbol.replace(':USDT', '').replace('/', ''), # Ej: BTCUSDT
+            'type': 'TRAILING_STOP_MARKET',
+            'side': lado_salida.upper(),       # 'BUY' o 'SELL'
+            'quantity': str(cantidad),
+            'price': str(precio_actual),         # Activación inicial
+            'activationPrice': str(precio_actual), # Activación duplicada requerida en Testnet
+            'callbackRate': str(TRAILING_PERC / 100), # Porcentaje en decimal (ej: 0.015)
+            'closePosition': 'true',            # Cierra posición en modo cobertura (en texto)
+            'positionSide': direccion           # 'LONG' o 'SHORT'
         }
         
-        # Usamos 'privatePostSwapV2TradeOrder' que habla directo con la API de BingX sin filtros
-        orden_trailing = exchange.privatePostSwapV2TradeOrder({
-            'symbol': symbol.replace(':USDT', '').replace('/', ''), # Formato nativo (ej: BTC-USDT o BTCUSDT)
-            'type': 'TRAILING_STOP_MARKET',
-            'side': lado_salida.upper(), # 'BUY' o 'SELL'
-            'quantity': str(cantidad),
-            'price': str(precio_actual), # Duplicamos aquí por seguridad para cumplir la validación
-            **params_trailing
-        })
+        # Usamos el método request universal apuntando al endpoint de órdenes de la API v2 de Swap
+        orden_trailing = exchange.request(
+            path='swap/v2/trade/order',
+            api='private',
+            method='POST',
+            params=params_nativos
+        )
         
         # Guardar estado local
         st.session_state.detalles_operacion = {
