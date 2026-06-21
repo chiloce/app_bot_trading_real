@@ -34,25 +34,25 @@ VOLUMEN_MINIMO = st.sidebar.number_input("Volumen mínimo en vela (USDT)", value
 TRAILING_PERC = st.sidebar.slider("Trailing Stop (%)", min_value=0.5, max_value=5.0, value=1.5, step=0.1)
 
 # =====================================================================
-# CONEXIÓN NATIVA A BINGX (FUTUROS PERPETUOS)
+# CONEXIÓN NATIVA A BINGX CON SANDBOX FORZADO (LIMPIEZA DE CACHÉ)
 # =====================================================================
-if 'exchange' not in st.session_state:
-    st.session_state.exchange = ccxt.bingx({
-        'apiKey': st.secrets["API_KEY_TESTNET"],
-        'secret': st.secrets["SECRET_KEY_TESTNET"],
-        'enableRateLimit': True,
-        'options': {'defaultType': 'swap'}
-    })
-    
-    # FORZAMOS A CCXT A CONECTARSE AL ENTORNO DE SIMULACIÓN VST DE BINGX
-    st.session_state.exchange.set_sandbox_mode(True) 
-    
-    try:
-        st.session_state.exchange.load_markets()
-    except Exception as e:
-        print(f"Error inicial cargando mercados: {e}")
+exchange = ccxt.bingx({
+    'apiKey': st.secrets["API_KEY_TESTNET"],
+    'secret': st.secrets["SECRET_KEY_TESTNET"],
+    'enableRateLimit': True,
+    'options': {
+        'defaultType': 'swap' # Conecta directamente a Futuros Perpetuos
+    }
+})
 
-exchange = st.session_state.exchange
+# Forzar el entorno Sandbox de simulación VST
+exchange.set_sandbox_mode(True)
+
+# Cargar mercados de forma segura en cada ciclo limpio
+try:
+    exchange.load_markets()
+except Exception as e:
+    print(f"Error cargando mercados: {e}")
 
 # Contenedores visuales en la interfaz
 metrica_estado = st.empty()
