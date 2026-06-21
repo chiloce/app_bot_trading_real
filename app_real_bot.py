@@ -89,19 +89,19 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         params_leverage = {'side': direccion} # LONG o SHORT
         exchange.set_leverage(int(LEVERAGE), symbol, params=params_leverage)
         
-        # 2. Orden de Entrada (Demo VST)
+        # 2. Orden de Entrada (Demo VST) - PARAMETRO CORREGIDO A 'amount'
         lado_entrada = 'buy' if direccion == 'LONG' else 'sell'
         params_entrada = {'marginType': 'VST'} 
-        orden_entrada = exchange.create_market_order(symbol, lado_entrada, quantity=cantidad, params=params_entrada)
+        orden_entrada = exchange.create_market_order(symbol, lado_entrada, amount=cantidad, params=params_entrada)
         time.sleep(0.3)
         
-        # 3. Orden de Trailing Stop
+        # 3. Orden de Trailing Stop - PARAMETRO CORREGIDO A 'amount'
         lado_salida = 'sell' if direccion == 'LONG' else 'buy'
         params_trailing = {
             'callbackRate': str(TRAILING_PERC / 100),
             'reduceOnly': True
         }
-        orden_trailing = exchange.create_order(symbol, 'TRAILING_STOP_MARKET', lado_salida, quantity=cantidad, params=params_trailing)
+        orden_trailing = exchange.create_order(symbol, 'TRAILING_STOP_MARKET', lado_salida, amount=cantidad, params=params_trailing)
         
         # Guardar estado local
         st.session_state.detalles_operacion = {
