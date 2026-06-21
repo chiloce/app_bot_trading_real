@@ -90,51 +90,45 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         cantidad = calcular_cantidad_contratos(symbol, precio_actual)
         if cantidad == 0: return False
         
-        # 1. Configurar Apalancamiento
+        # 1. Configurar Apalancamiento en BingX
         params_leverage = {'side': direccion}
         exchange.set_leverage(int(LEVERAGE), symbol, params=params_leverage)
         time.sleep(0.3)
         
-        # 2. Orden de Entrada (Demo VST)
+        # 2. Ejecutar Orden de Entrada a Mercado (Demo VST)
         lado_entrada = 'buy' if direccion == 'LONG' else 'sell'
         params_entrada = {
             'marginType': 'VST',
             'positionSide': direccion
         } 
         orden_entrada = exchange.create_market_order(symbol, lado_entrada, amount=cantidad, params=params_entrada)
-        time.sleep(0.3)
         
-        # 3. Orden de Trailing Stop (Formato Numérico Puro - Request con Debug)
-        lado_salida = 'sell' if direccion == 'LONG' else 'buy'
-        
-        params_nativos = {
-            'symbol': symbol.replace(':USDT', '').replace('/', ''),
-            'type': 'TRAILING_STOP_MARKET',
-            'side': lado_salida.upper(),
-            'quantity': float(cantidad),
-            'price': float(precio_actual),
-            'activationPrice': float(precio_actual),
-            'callbackRate': str(TRAILING_PERC / 100),
-            'closePosition': True,
-            'positionSide': direccion
+        # 3. Calcular Stop Loss Inicial Guiado por Código
+        if direccion == "LONG":
+            stop_inicial = precio_actual * (1 - (TRAILING_PERC / 100))
+        else:
+            stop_inicial = precio_actual * (1 + (TRAILING_PERC / 100))
+            
+        # Guardamos la información en el session_state para que el bot la controle de forma dinámica
+        st.session_state.detalles_operacion = {
+            "Par": symbol.split('/')[0],
+            "Symbol_Completo": symbol,
+            "Dirección": direccion,
+            "Precio Entrada": precio_actual,
+            "Cantidad": cantidad,
+            "Valor Nominal": f"${MARGEN_USD * LEVERAGE} USD",
+            "Trailing Stop Activo": float(stop_inicial),
+            "Precio Máximo Alcanzado": float(precio_actual)
         }
         
-        try:
-            orden_trailing = exchange.request(
-                path='swap/v2/trade/order',
-                api='private',
-                method='POST',
-                params=params_nativos
-            )
-        except Exception as e:
-            error_msg = str(e)
-            if hasattr(e, 'feedback'):
-                error_msg = f"{e.feedback}"
-            elif hasattr(exchange, 'last_json_response') and exchange.last_json_response:
-                error_msg = f"{exchange.last_json_response}"
-            
-            consola_errores.error(f"❌ Error detallado en Trailing Stop: {error_msg}")
-            return False
+        msg = f"🛒 ¡POSICIÓN ABIERTA EN BINGX!\n\nPar: {symbol.split('/')[0]}\nDirección: {direccion}\nPrecio: {precio_actual} USDT\n🎯 Trailing Stop Inicial: {stop_inicial:.4f} USDT ({TRAILING_PERC}%)"
+        enviar_alerta(msg)
+        return True
+
+    except Exception as e:
+        error_completo = getattr(e, 'message', str(e))
+        consola_errores.error(f"❌ BingX rechazó la orden principal: {error_completo}")
+        return False
         
         # Guardar la información para pintar el cuadro azul estable
         st.session_state.detalles_operacion = {
@@ -155,21 +149,59 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         return False
 
 # =====================================================================
-# MOTOR DE ESCANEO CONTINUO (BINGX) - ¡RESTAURADO AQUÍ ABAJO!
+# MOTOR DE ESCANEO CONTINUO (BINGX)
 # =====================================================================
 if BOT_ENCENDIDO:
     PARES_A_REVISAR = ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", "BNB/USDT:USDT", "XRP/USDT:USDT"]
 
+    # SI HAY UNA OPERACIÓN ACTIVA, GESTIONAMOS EL TRAILING STOP VIVO
     if st.session_state.en_operacion:
         try:
-            par_activo = st.session_state.detalles_operacion.get("Par") + "/USDT:USDT"
-            posiciones = exchange.fetch_positions(symbols=[par_activo])
-            if posiciones and float(posiciones[0]['info'].get('positionAmt', 0)) == 0:
-                st.session_state.en_operacion = False
-                enviar_alerta(f"🏁 La posición en {st.session_state.detalles_operacion.get('Par')} ha sido cerrada.")
-        except Exception as e:
-            print(f"Error verificando estado en BingX: {e}")
+            op = st.session_state.detalles_operacion
+            symbol_activo = op.get("Symbol_Completo")
+            
+            # Consultamos el precio actual del token en operación
+            ticker = exchange.fetch_ticker(symbol_activo)
+            precio_vivo = float(ticker['last'])
+            
+            direccion = op.get("Dirección")
+            stop_actual = op.get("Trailing Stop Activo")
+            max_precio = op.get("Precio Máximo Alcanzado")
+            
+            # LÓGICA DE SEGUIMIENTO DINÁMICA
+            if direccion == "LONG":
+                if precio_vivo > max_precio:
+                    st.session_state.detalles_operacion["Precio Máximo Alcanzado"] = precio_vivo
+                    nuevo_stop = precio_vivo * (1 - (TRAILING_PERC / 100))
+                    if nuevo_stop > stop_actual:
+                        st.session_state.detalles_operacion["Trailing Stop Activo"] = float(nuevo_stop)
+                
+                # CONDICIÓN DE SALIDA (STOP HIT)
+                if precio_vivo <= stop_actual:
+                    # Mandamos orden de cierre a mercado
+                    exchange.create_market_order(symbol_activo, 'sell', amount=op.get("Cantidad"), params={'marginType': 'VST', 'positionSide': 'LONG'})
+                    st.session_state.en_operacion = False
+                    enviar_alerta(f"🏁 Trailing Stop ejecutado en {op.get('Par')}. Posición Cerrada.")
+                    st.rerun()
+                    
+            elif direccion == "SHORT":
+                if precio_vivo < max_precio: # Para short, max_precio actúa como el mínimo alcanzado
+                    st.session_state.detalles_operacion["Precio Máximo Alcanzado"] = precio_vivo
+                    nuevo_stop = precio_vivo * (1 + (TRAILING_PERC / 100))
+                    if nuevo_stop < stop_actual:
+                        st.session_state.detalles_operacion["Trailing Stop Activo"] = float(nuevo_stop)
+                
+                # CONDICIÓN DE SALIDA (STOP HIT)
+                if precio_vivo >= stop_actual:
+                    exchange.create_market_order(symbol_activo, 'buy', amount=op.get("Cantidad"), params={'marginType': 'VST', 'positionSide': 'SHORT'})
+                    st.session_state.en_operacion = False
+                    enviar_alerta(f"🏁 Trailing Stop ejecutado en {op.get('Par')}. Posición Cerrada.")
+                    st.rerun()
 
+        except Exception as e:
+            print(f"Error gestionando trailing stop en vivo: {e}")
+
+    # PINTAR LA TABLA INFORMATIVA O DE MONITOREO
     if st.session_state.en_operacion:
         df_op = pd.DataFrame([st.session_state.detalles_operacion])
         monitor_operacion.dataframe(df_op, use_container_width=True)
@@ -203,14 +235,14 @@ if BOT_ENCENDIDO:
             if volumen_vela < VOLUMEN_MINIMO:
                 continue
             
-            direccion = None
+            direccion_disparo = None
             if variacion >= UMBRAL:
-                direccion = "LONG"
+                direccion_disparo = "LONG"
             elif variacion <= -UMBRAL:
-                direccion = "SHORT"
+                direccion_disparo = "SHORT"
 
-            if direccion and not st.session_state.en_operacion:
-                if abrir_posicion_con_trailing(symbol, direccion, precio_actual):
+            if direccion_disparo and not st.session_state.en_operacion:
+                if abrir_posicion_con_trailing(symbol, direccion_disparo, precio_actual):
                     st.session_state.en_operacion = True
                     st.rerun()
         except Exception as e:
