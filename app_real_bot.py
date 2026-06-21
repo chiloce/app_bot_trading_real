@@ -21,7 +21,7 @@ def enviar_alerta(mensaje):
 # =====================================================================
 st.set_page_config(page_title="Crypto Execution Bot (BingX)", layout="wide")
 st.title("⚡ Bot de Ejecución Automatizada Multi-Trade (BingX)")
-st.subheader("Escaneo Masivo de Volatilidad y Trailing Stop por Código (Máx 3 Trades)")
+st.subheader("Escaneo Masivo de Volatilidad y Trailing Stop por Código (Máx 10 Trades)")
 
 # CONFIGURACIÓN DE LA BARRA LATERAL (UMBRAL EXPANDIDO A 15%)
 st.sidebar.header("⚙️ Parámetros de Trading")
@@ -34,7 +34,7 @@ VOLUMEN_MINIMO = st.sidebar.number_input("Volumen mínimo en vela (USDT)", value
 TRAILING_PERC = st.sidebar.slider("Trailing Stop (%)", min_value=0.5, max_value=5.0, value=1.5, step=0.1)
 
 # =====================================================================
-# CONEXIÓN OPTIMIZADA CON CACHÉ
+# CONEXIÓN OPTIMIZADA WITH CACHÉ
 # =====================================================================
 @st.cache_resource
 def inicializar_exchange():
@@ -71,7 +71,7 @@ st.subheader("📊 Panel de Operaciones Activas (Sincronizado con Exchange)")
 monitor_operacion = st.container()
 
 st.markdown("---")
-st.subheader("🔍 Monitoreo del Mercado en Vivo (Top de Movimiento)")
+st.subheader("🔍 Monitoreo del Mercado en Vivo (Top de Movimiento en Vela Actual)")
 consola_monitoreo = st.empty()
 
 st.markdown("---")
@@ -92,7 +92,7 @@ except Exception as e:
     print(f"Error cargando balance VST: {e}")
 
 if BOT_ENCENDIDO:
-    metrica_estado.success(f"🟢 BOT ENCENDIDO | Cargando catálogo completo y escaneando impulsos...")
+    metrica_estado.success(f"🟢 BOT ENCENDIDO | Cargando catálogo completo y escaneando impulsos en tiempo real...")
 else:
     metrica_estado.warning("🔴 BOT APAGADO | El modo de trading automático está desactivado.")
     with monitor_operacion:
@@ -144,7 +144,6 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
 # MOTOR DE ESCANEO Y SINCRONIZACIÓN CONTINUA (DINÁMICO)
 # =====================================================================
 if BOT_ENCENDIDO:
-    # 🔄 PASO 1: Descubrimiento dinámico de todos los pares USDT en BingX
     try:
         mercados = exchange.load_markets()
         PARES_A_REVISAR = [symbol for symbol in mercados.keys() if symbol.endswith('/USDT:USDT')]
@@ -270,24 +269,23 @@ if BOT_ENCENDIDO:
         else:
             st.info("Sincronizado. Sin posiciones abiertas en BingX en este momento.")
 
-    # 🔍 PASO 3: ESCANEO GENERAL DE MERCADO (CORREGIDO PARA MEDIR VELA DE 15M EXACTA)
+    # 🔍 PASO 3: ESCANEO GENERAL DE MERCADO (MEDICIÓN PRECISA EN VELA SELECCIONADA)
     datos_consola = []
     
-    # Escaneamos con fetch_ohlcv para asegurar que medimos la apertura de la vela de 15m elegida
     for symbol in PARES_A_REVISAR:
         try:
             token_curr = symbol.split('/')[0]
             
-            # Pedimos las últimas 2 velas de la temporalidad seleccionada (15m)
+            # Descargamos los datos OHLCV reales para medir la apertura de la vela
             velas = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=2)
             if len(velas) < 2: continue
             
             vela_actual = velas[-1]
-            precio_apertura = float(vela_actual[1]) # Precio donde abrió ESTA vela de 15m
-            precio_actual = float(vela_actual[4])   # Precio en vivo actual
-            volumen_vela = float(vela_actual[5]) * precio_actual # Volumen de esta vela
+            precio_apertura = float(vela_actual[1])
+            precio_actual = float(vela_actual[4]) 
+            volumen_vela = float(vela_actual[5]) * precio_actual
             
-            # Cálculo milimétrico basado estrictamente en la vela en curso
+            # Cálculo exacto basado en el nacimiento de la vela actual
             variacion_vela_real = ((precio_actual - precio_apertura) / precio_apertura) * 100
             
             datos_consola.append({
@@ -298,46 +296,3 @@ if BOT_ENCENDIDO:
             })
             
             # Restricciones multitrade
-            if token_curr in st.session_state.operaciones_activas or len(st.session_state.operaciones_activas) >= 10:
-                continue
-                
-            if volumen_vela < VOLUMEN_MINIMO:
-                continue
-            
-            direccion_disparo = None
-            if variacion_vela_real >= UMBRAL: 
-                direccion_disparo = "LONG"
-            elif variacion_vela_real <= -UMBRAL: 
-                direccion_disparo = "SHORT"
-
-            if direccion_disparo:
-                if abrir_posicion_con_trailing(symbol, direccion_disparo, precio_actual):
-                    st.rerun()
-        except Exception as e: 
-            continue
-                
-    if datos_consola:
-        df_consola = pd.DataFrame(datos_consola)
-        df_consola["Var_Abs"] = df_consola["Variación Vela"].abs()
-        df_consola = df_consola.sort_values(by="Var_Abs", ascending=False).drop(columns=["Var_Abs"])
-        
-        df_consola["Variación Vela"] = df_consola["Variación Vela"].map(lambda x: f"{x:+.3f}%")
-        df_consola["Volumen"] = df_consola["Volumen"].map(lambda x: f"${x:,.0f} USD")
-        consola_monitoreo.dataframe(df_consola.head(15), use_container_width=True)
-        
-        # Formateamos visualmente para que se vea limpio
-        df_consola["Variación 24h"] = df_consola["Variación 24h"].map(lambda x: f"{x:+.2f}%")
-        df_consola["Volumen"] = df_consola["Volumen"].map(lambda x: f"${x:,.0f} USD")
-        consola_monitoreo.dataframe(df_consola.head(15), use_container_width=True) # Muestra el Top 15 volátiles
-
-# PINTAR EL HISTORIAL DE TRADES
-if st.session_state.historial_trades:
-    df_historial = pd.DataFrame(st.session_state.historial_trades)
-    tabla_historial.dataframe(df_historial, use_container_width=True)
-else:
-    tabla_historial.info("Aún no hay operaciones cerradas en esta sesión.")
-
-# REFRESCAR CADA 5 SEGUNDOS
-if BOT_ENCENDIDO:
-    time.sleep(5)
-    st.rerun()
