@@ -127,7 +127,7 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
 # MOTOR DE ESCANEO CONTINUO (BINGX)
 # =====================================================================
 if BOT_ENCENDIDO:
-    PARES_A_REVISAR = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT"]
+    PARES_A_REVISAR = ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", "BNB/USDT:USDT", "XRP/USDT:USDT"]
 
     if st.session_state.en_operacion:
         try:
