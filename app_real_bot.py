@@ -103,19 +103,23 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         orden_entrada = exchange.create_market_order(symbol, lado_entrada, amount=cantidad, params=params_entrada)
         time.sleep(0.3)
         
-       # 3. Orden de Trailing Stop (Corregido con precio de activación)
+       # 3. Orden de Trailing Stop (Mapeo Nativo para BingX Testnet)
         lado_salida = 'sell' if direccion == 'LONG' else 'buy'
         params_trailing = {
             'callbackRate': str(TRAILING_PERC / 100),
             'closePosition': True,
             'positionSide': direccion,
-            'price': precio_actual # <-- Le entregamos el precio actual exigido por BingX
+            'activationPrice': precio_actual # <-- Formato nativo de BingX para el precio inicial
         }
+        
+        # NOTA: Enormes exchanges en ccxt requieren que para órdenes condicionales nativas 
+        # con 'activationPrice' en los params, el parámetro obligatorio 'price' de la función vaya como None.
         orden_trailing = exchange.create_order(
             symbol, 
             'TRAILING_STOP_MARKET', 
             lado_salida, 
             amount=cantidad, 
+            price=None, # <-- Cambiamos esto a None para que no choque con la distancia máxima
             params=params_trailing
         )
         
