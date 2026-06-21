@@ -85,9 +85,9 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         cantidad = calcular_cantidad_contratos(symbol, precio_actual)
         if cantidad == 0: return False
         
-        # 1. Configurar Apalancamiento
-        exchange.set_leverage(int(LEVERAGE), symbol)
-        time.sleep(0.3)
+        # 1. Configurar Apalancamiento especificando la dirección (Exigido por BingX)
+        params_leverage = {'side': direccion} # LONG o SHORT
+        exchange.set_leverage(int(LEVERAGE), symbol, params=params_leverage)
         
         # 2. Orden de Entrada (Demo VST)
         lado_entrada = 'buy' if direccion == 'LONG' else 'sell'
