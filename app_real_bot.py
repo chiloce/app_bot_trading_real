@@ -156,3 +156,83 @@ if BOT_ENCENDIDO:
                     st.session_state.detalles_operacion["Precio Máximo Alcanzado"] = precio_vivo
                     nuevo_stop = precio_vivo * (1 - (TRAILING_PERC / 100))
                     if nuevo_stop > stop_actual:
+                        st.session_state.detalles_operacion["Trailing Stop Activo"] = float(nuevo_stop)
+                
+                # CONDICIÓN DE SALIDA (STOP HIT)
+                if precio_vivo <= stop_actual:
+                    exchange.create_market_order(symbol_activo, 'sell', amount=op.get("Cantidad"), params={'marginType': 'VST', 'positionSide': 'LONG'})
+                    st.session_state.en_operacion = False
+                    enviar_alerta(f"🏁 Trailing Stop ejecutado en {op.get('Par')}. Posición Cerrada.")
+                    st.rerun()
+                    
+            elif direccion == "SHORT":
+                if precio_vivo < max_precio: # En SHORT max_precio actúa como el precio mínimo alcanzado
+                    st.session_state.detalles_operacion["Precio Máximo Alcanzado"] = precio_vivo
+                    nuevo_stop = precio_vivo * (1 + (TRAILING_PERC / 100))
+                    if nuevo_stop < stop_actual:
+                        st.session_state.detalles_operacion["Trailing Stop Activo"] = float(nuevo_stop)
+                
+                # CONDICIÓN DE SALIDA (STOP HIT)
+                if precio_vivo >= stop_actual:
+                    exchange.create_market_order(symbol_activo, 'buy', amount=op.get("Cantidad"), params={'marginType': 'VST', 'positionSide': 'SHORT'})
+                    st.session_state.en_operacion = False
+                    enviar_alerta(f"🏁 Trailing Stop ejecutado en {op.get('Par')}. Posición Cerrada.")
+                    st.rerun()
+
+        except Exception as e:
+            print(f"Error gestionando trailing stop en vivo: {e}")
+
+    # PINTAR LA TABLA INFORMATIVA O DE MONITOREO
+    if st.session_state.en_operacion:
+        df_op = pd.DataFrame([st.session_state.detalles_operacion])
+        monitor_operacion.dataframe(df_op, use_container_width=True)
+    else:
+        monitor_operacion.info("Vigilando los pares en BingX... Esperando condiciones de mercado.")
+
+    datos_consola = []
+    
+    for symbol in PARES_A_REVISAR:
+        if st.session_state.en_operacion:
+            break
+            
+        try:
+            velas = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=2)
+            if len(velas) < 2: continue
+            
+            vela_actual = velas[-1]
+            precio_apertura = vela_actual[1]
+            precio_actual = vela_actual[4]
+            volumen_vela = vela_actual[5] * precio_actual
+            
+            variacion = ((precio_actual - precio_apertura) / precio_apertura) * 100
+            
+            datos_consola.append({
+                "Moneda": symbol.split('/')[0],
+                "Precio Actual": f"{precio_actual} USDT",
+                "Variación Vela": f"{variacion:.3f}%",
+                "Volumen": f"${volumen_vela:,.0f} USD"
+            })
+            
+            if volumen_vela < VOLUMEN_MINIMO:
+                continue
+            
+            direccion_disparo = None
+            if variacion >= UMBRAL:
+                direccion_disparo = "LONG"
+            elif variacion <= -UMBRAL:
+                direccion_disparo = "SHORT"
+
+            if direccion_disparo and not st.session_state.en_operacion:
+                if abrir_posicion_con_trailing(symbol, direccion_disparo, precio_actual):
+                    st.session_state.en_operacion = True
+                    st.rerun()
+        except Exception as e:
+            print(f"Error leyendo {symbol}: {e}")
+            continue
+                
+    if datos_consola:
+        df_consola = pd.DataFrame(datos_consola)
+        consola_monitoreo.dataframe(df_consola, use_container_width=True)
+
+    time.sleep(5)
+    st.rerun()
