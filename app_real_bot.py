@@ -21,13 +21,13 @@ def enviar_alerta(mensaje):
 # =====================================================================
 st.set_page_config(page_title="Crypto Execution Bot (BingX)", layout="wide")
 st.title("⚡ Bot de Ejecución Automatizada Multi-Trade (BingX)")
-st.subheader("Sincronización en Vivo y Control de Salidas Manuales (Máx 3 Trades)")
+st.subheader("Escaneo Masivo de Volatilidad y Trailing Stop por Código (Máx 3 Trades)")
 
-# CONFIGURACIÓN DE LA BARRA LATERAL
+# CONFIGURACIÓN DE LA BARRA LATERAL (UMBRAL EXPANDIDO A 15%)
 st.sidebar.header("⚙️ Parámetros de Trading")
 BOT_ENCENDIDO = st.sidebar.toggle("🤖 ACTIVAR BOT DE TRADING", value=False)
 TIMEFRAME = st.sidebar.selectbox("Temporalidad de Análisis", ["15m", "4h"], index=0)
-UMBRAL = st.sidebar.slider("Umbral de Disparo (%)", min_value=0.01, max_value=5.0, value=0.10, step=0.01)
+UMBRAL = st.sidebar.slider("Umbral de Disparo (%)", min_value=0.01, max_value=15.0, value=5.0, step=0.01)
 MARGEN_USD = st.sidebar.number_input("Margen de Entrada (USD)", min_value=1.0, value=5.0, step=1.0)
 LEVERAGE = st.sidebar.number_input("Apalancamiento (X)", min_value=1, max_value=25, value=10, step=1)
 VOLUMEN_MINIMO = st.sidebar.number_input("Volumen mínimo en vela (USDT)", value=10000, step=5000)
@@ -68,10 +68,10 @@ p3 = panel_balance[2].empty()
 
 st.markdown("---")
 st.subheader("📊 Panel de Operaciones Activas (Sincronizado con Exchange)")
-monitor_operacion = st.container() # Cambiado a contenedor estático para la interacción
+monitor_operacion = st.container()
 
 st.markdown("---")
-st.subheader("🔍 Monitoreo del Mercado en Vivo")
+st.subheader("🔍 Monitoreo del Mercado en Vivo (Top de Movimiento)")
 consola_monitoreo = st.empty()
 
 st.markdown("---")
@@ -92,7 +92,7 @@ except Exception as e:
     print(f"Error cargando balance VST: {e}")
 
 if BOT_ENCENDIDO:
-    metrica_estado.success(f"🟢 BOT ENCENDIDO | Sincronizando y listo para operar...")
+    metrica_estado.success(f"🟢 BOT ENCENDIDO | Cargando catálogo completo y escaneando impulsos...")
 else:
     metrica_estado.warning("🔴 BOT APAGADO | El modo de trading automático está desactivado.")
     with monitor_operacion:
@@ -108,7 +108,6 @@ def calcular_cantidad_contratos(symbol, precio_actual):
         cantidad_ajustada = exchange.amount_to_precision(symbol, cantidad_bruta)
         return float(cantidad_ajustada)
     except Exception as e:
-        consola_errores.error(f"⚠️ Error calculando tamaño de posición: {e}")
         return 0
 
 def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
@@ -122,10 +121,7 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         time.sleep(0.3)
         
         lado_entrada = 'buy' if direccion == 'LONG' else 'sell'
-        params_entrada = {
-            'marginType': 'VST',
-            'positionSide': direccion
-        } 
+        params_entrada = { 'marginType': 'VST', 'positionSide': direccion } 
         orden_entrada = exchange.create_market_order(symbol, lado_entrada, amount=cantidad, params=params_entrada)
         
         if direccion == "LONG":
@@ -134,31 +130,30 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
             stop_inicial = precio_actual * (1 + (TRAILING_PERC / 100))
             
         st.session_state.operaciones_activas[token] = {
-            "Par": token,
-            "Symbol_Completo": symbol,
-            "Dirección": direccion,
-            "Precio Entrada": precio_actual,
-            "Cantidad": cantidad,
-            "Valor Nominal": f"${MARGEN_USD * LEVERAGE} USD",
-            "Trailing Stop Activo": float(stop_inicial),
-            "Precio Máximo Alcanzado": float(precio_actual)
+            "Par": token, "Symbol_Completo": symbol, "Dirección": direccion, "Precio Entrada": precio_actual,
+            "Cantidad": cantidad, "Valor Nominal": f"${MARGEN_USD * LEVERAGE} USD",
+            "Trailing Stop Activo": float(stop_inicial), "Precio Máximo Alcanzado": float(precio_actual)
         }
         
-        msg = f"🛒 ¡POSICIÓN ABIERTA!\n\nPar: {token}\nDirección: {direccion}\nPrecio: {precio_actual} USDT"
-        enviar_alerta(msg)
+        enviar_alerta(f"🛒 ¡ENTRADA POR IMPULSO DISPARADA!\n\nPar: {token}\nDirección: {direccion}\nPrecio: {precio_actual} USDT")
         return True
     except Exception as e:
-        print(f"Error abriendo posición: {e}")
         return False
 
 # =====================================================================
-# MOTOR DE ESCANEO Y SINCRONIZACIÓN CONTINUA
+# MOTOR DE ESCANEO Y SINCRONIZACIÓN CONTINUA (DINÁMICO)
 # =====================================================================
 if BOT_ENCENDIDO:
-    PARES_A_REVISAR = ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", "BNB/USDT:USDT", "XRP/USDT:USDT"]
+    # 🔄 PASO 1: Descubrimiento dinámico de todos los pares USDT en BingX
+    try:
+        mercados = exchange.load_markets()
+        PARES_A_REVISAR = [symbol for symbol in mercados.keys() if symbol.endswith('/USDT:USDT')]
+    except Exception as e:
+        PARES_A_REVISAR = ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"]
+
     dict_sincronizado = {}
 
-    # 1. ETAPA DE IMPORTACIÓN REAL DESDE BINGX
+    # SINCRONIZACIÓN DIRECTA DESDE EXCHANGE
     try:
         posiciones_exchange = exchange.fetch_positions()
         for pos in posiciones_exchange:
@@ -181,20 +176,15 @@ if BOT_ENCENDIDO:
                             stop_inicial = precio_actual_ex * (1 + (TRAILING_PERC / 100))
                             
                         dict_sincronizado[token_ex] = {
-                            "Par": token_ex,
-                            "Symbol_Completo": symbol_ex,
-                            "Dirección": direccion_ex,
-                            "Precio Entrada": precio_entrada_ex,
-                            "Cantidad": cantidad_ex,
-                            "Valor Nominal": f"${cantidad_ex * precio_entrada_ex:.1f} USD",
-                            "Trailing Stop Activo": float(stop_inicial),
-                            "Precio Máximo Alcanzado": float(precio_actual_ex)
+                            "Par": token_ex, "Symbol_Completo": symbol_ex, "Dirección": direccion_ex, "Precio Entrada": precio_entrada_ex,
+                            "Cantidad": cantidad_ex, "Valor Nominal": f"${cantidad_ex * precio_entrada_ex:.1f} USD",
+                            "Trailing Stop Activo": float(stop_inicial), "Precio Máximo Alcanzado": float(precio_actual_ex)
                         }
         st.session_state.operaciones_activas = dict_sincronizado
     except Exception as e:
-        print(f"Error en etapa de sincronización: {e}")
+        print(f"Error sincronización: {e}")
 
-    # 2. MONITOR DE TRAILING STOP
+    # GESTIÓN Y MONITOR DE TRAILING STOP
     tokens_abiertos = list(st.session_state.operaciones_activas.keys())
     for token in tokens_abiertos:
         try:
@@ -221,13 +211,12 @@ if BOT_ENCENDIDO:
                 if precio_vivo <= stop_actual:
                     exchange.create_market_order(symbol_activo, 'sell', amount=cantidad, params={'marginType': 'VST', 'positionSide': 'LONG'})
                     del st.session_state.operaciones_activas[token]
-                    
                     pnl = (precio_vivo - precio_entrada) * cantidad
                     st.session_state.historial_trades.append({
                         "Fecha/Hora": time.strftime("%Y-%m-%d %H:%M:%S"), "Par": token, "Dirección": direccion,
                         "Precio Entrada": precio_entrada, "Precio Cierre": precio_vivo, "PnL Estimado": f"{pnl:+.4f} VST"
                     })
-                    enviar_alerta(f"🏁 Trailing Stop en {token}. Resultado: {pnl:+.2f} VST")
+                    enviar_alerta(f"🏁 Trailing Stop ejecutado en {token}. Resultado: {pnl:+.2f} VST")
                     st.rerun()
                     
             elif direccion == "SHORT":
@@ -240,109 +229,95 @@ if BOT_ENCENDIDO:
                 if precio_vivo >= stop_actual:
                     exchange.create_market_order(symbol_activo, 'buy', amount=cantidad, params={'marginType': 'VST', 'positionSide': 'SHORT'})
                     del st.session_state.operaciones_activas[token]
-                    
                     pnl = (precio_entrada - precio_vivo) * cantidad
                     st.session_state.historial_trades.append({
                         "Fecha/Hora": time.strftime("%Y-%m-%d %H:%M:%S"), "Par": token, "Dirección": direccion,
                         "Precio Entrada": precio_entrada, "Precio Cierre": precio_vivo, "PnL Estimado": f"{pnl:+.4f} VST"
                     })
-                    enviar_alerta(f"🏁 Trailing Stop en {token}. Resultado: {pnl:+.2f} VST")
+                    enviar_alerta(f"🏁 Trailing Stop ejecutado en {token}. Resultado: {pnl:+.2f} VST")
                     st.rerun()
         except Exception as e:
-            print(f"Error en monitor de trailing: {e}")
+            print(f"Error trailing: {e}")
 
-    # RENDEREAR PANEL DE OPERACIONES ACTIVAS CON BOTÓN DE ACCIÓN MANUAL
+    # PANEL INTERACTIVO DE OPERACIONES ACTIVAS
     with monitor_operacion:
         if st.session_state.operaciones_activas:
             df_op = pd.DataFrame(st.session_state.operaciones_activas.values())
-            # Agregamos una columna virtual de control booleana
             df_op["Cerrar Trade"] = False
             columnas_orden = ["Par", "Dirección", "Precio Entrada", "Cantidad", "Valor Nominal", "Trailing Stop Activo", "Precio Máximo Alcanzado", "Cerrar Trade"]
             
-            # Usamos data_editor para habilitar la casilla interactiva tipo botón
             evento_cierre = st.data_editor(
                 df_op[columnas_orden],
-                column_config={
-                    "Cerrar Trade": st.column_config.CheckboxColumn(
-                        "Cerrar de Emergencia",
-                        help="Haz clic para ejecutar un Cierre Flash instantáneo a mercado",
-                        default=False,
-                    )
-                },
+                column_config={"Cerrar Trade": st.column_config.CheckboxColumn("Cerrar de Emergencia", default=False)},
                 disabled=["Par", "Dirección", "Precio Entrada", "Cantidad", "Valor Nominal", "Trailing Stop Activo", "Precio Máximo Alcanzado"],
-                use_container_width=True,
-                key="editor_posiciones"
+                use_container_width=True, key="editor_posiciones"
             )
             
-            # DETECTAR SI EL USUARIO PRESIONÓ LA CASILLA DE CIERRE
             for i, row in evento_cierre.iterrows():
                 if row["Cerrar Trade"] == True:
                     token_a_cerrar = row["Par"]
                     op_detalles = st.session_state.operaciones_activas[token_a_cerrar]
-                    symbol_cierre = op_detalles["Symbol_Completo"]
                     lado_cierre = 'sell' if op_detalles["Dirección"] == 'LONG' else 'buy'
-                    
                     try:
-                        # 1. Mandamos la orden inmediata a BingX
-                        exchange.create_market_order(
-                            symbol_cierre, 
-                            lado_cierre, 
-                            amount=op_detalles["Cantidad"], 
-                            params={'marginType': 'VST', 'positionSide': op_detalles["Dirección"]}
-                        )
-                        # 2. Borramos de la memoria
+                        exchange.create_market_order(op_detalles["Symbol_Completo"], lado_cierre, amount=op_detalles["Cantidad"], params={'marginType': 'VST', 'positionSide': op_detalles["Dirección"]})
                         del st.session_state.operaciones_activas[token_a_cerrar]
-                        # 3. Registramos en el historial local
                         st.session_state.historial_trades.append({
                             "Fecha/Hora": time.strftime("%Y-%m-%d %H:%M:%S"), "Par": token_a_cerrar, "Dirección": op_detalles["Dirección"],
-                            "Precio Entrada": op_detalles["Precio Entrada"], "Precio Cierre": "Cierre Manual Web", "PnL Estimado": "Manual"
+                            "Precio Entrada": op_detalles["Precio Entrada"], "Precio Cierre": "Manual Web", "PnL Estimado": "Manual"
                         })
-                        enviar_alerta(f"🚨 ¡CIERRE DE EMERGENCIA EJECUTADO MANUALMENTE DESDE EL DASHBOARD EN {token_a_cerrar}!")
                         st.rerun()
-                    except Exception as e:
-                        st.error(f"No se pudo cerrar la posición: {e}")
+                    except Exception as e: pass
         else:
             st.info("Sincronizado. Sin posiciones abiertas en BingX en este momento.")
 
-    # 3. ESCANEO GENERAL DE MERCADO
+    # 🔍 PASO 3: ESCANEO GENERAL MASIVO DE MERCADO
     datos_consola = []
-    for symbol in PARES_A_REVISAR:
-        try:
-            token_curr = symbol.split('/')[0]
-            velas = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=2)
-            if len(velas) < 2: continue
-            
-            vela_actual = velas[-1]
-            precio_apertura = vela_actual[1]
-            precio_actual = vela_actual[4]
-            volumen_vela = vela_actual[5] * precio_actual
-            variacion = ((precio_actual - precio_apertura) / precio_apertura) * 100
-            
-            datos_consola.append({
-                "Moneda": token_curr, "Precio Actual": f"{precio_actual} USDT",
-                "Variación Vela": f"{variacion:.3f}%", "Volumen": f"${volumen_vela:,.0f} USD"
-            })
-            
-            if token_curr in st.session_state.operaciones_activas or len(st.session_state.operaciones_activas) >= 3:
-                continue
+    # Para agilizar la interfaz web en cargas masivas, ordenamos los tickers de golpe
+    try:
+        tickers = exchange.fetch_tickers(PARES_A_REVISAR)
+        for symbol in PARES_A_REVISAR:
+            try:
+                token_curr = symbol.split('/')[0]
+                if symbol not in tickers: continue
                 
-            if volumen_vela < VOLUMEN_MINIMO:
-                continue
-            
-            direccion_disparo = None
-            if variacion >= UMBRAL: direccion_disparo = "LONG"
-            elif variacion <= -UMBRAL: direccion_disparo = "SHORT"
+                precio_actual = float(tickers[symbol]['last'])
+                # Usamos los datos agregados por el ticker de 24h para calcular variaciones rápidas
+                variacion = float(tickers[symbol]['percentage']) if tickers[symbol]['percentage'] is not None else 0.0
+                volumen_24h = float(tickers[symbol]['baseVolume']) * precio_actual if tickers[symbol]['baseVolume'] is not None else 0.0
+                
+                # Guardamos los datos para pintar la consola de monitoreo
+                datos_consola.append({
+                    "Moneda": token_curr, "Precio Actual": f"{precio_actual} USDT",
+                    "Variación 24h": variacion, "Volumen": volumen_24h
+                })
+                
+                if token_curr in st.session_state.operaciones_activas or len(st.session_state.operaciones_activas) >= 3:
+                    continue
+                    
+                if volumen_24h < VOLUMEN_MINIMO:
+                    continue
+                
+                direccion_disparo = None
+                if variacion >= UMBRAL: direccion_disparo = "LONG"
+                elif variacion <= -UMBRAL: direccion_disparo = "SHORT"
 
-            if direccion_disparo:
-                if abrir_posicion_con_trailing(symbol, direccion_disparo, precio_actual):
-                    st.rerun()
-        except Exception as e:
-            print(f"Error en escaneo de {symbol}: {e}")
-            continue
+                if direccion_disparo:
+                    if abrir_posicion_con_trailing(symbol, direccion_disparo, precio_actual):
+                        st.rerun()
+            except Exception as e: continue
+    except Exception as e:
+        print(f"Error en consulta de masiva: {e}")
                 
     if datos_consola:
+        # Mostramos las monedas ordenadas por mayor movimiento absoluto en la tabla en vivo
         df_consola = pd.DataFrame(datos_consola)
-        consola_monitoreo.dataframe(df_consola, use_container_width=True)
+        df_consola["Variación Absoluta"] = df_consola["Variación 24h"].abs()
+        df_consola = df_consola.sort_values(by="Variación Absoluta", ascending=False).drop(columns=["Variación Absoluta"])
+        
+        # Formateamos visualmente para que se vea limpio
+        df_consola["Variación 24h"] = df_consola["Variación 24h"].map(lambda x: f"{x:+.2f}%")
+        df_consola["Volumen"] = df_consola["Volumen"].map(lambda x: f"${x:,.0f} USD")
+        consola_monitoreo.dataframe(df_consola.head(15), use_container_width=True) # Muestra el Top 15 volátiles
 
 # PINTAR EL HISTORIAL DE TRADES
 if st.session_state.historial_trades:
