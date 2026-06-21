@@ -103,14 +103,21 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         orden_entrada = exchange.create_market_order(symbol, lado_entrada, amount=cantidad, params=params_entrada)
         time.sleep(0.3)
         
-       # 3. Orden de Trailing Stop (Adaptado para Modo Cobertura de BingX)
+       # 3. Orden de Trailing Stop (Corregido con precio de activación)
         lado_salida = 'sell' if direccion == 'LONG' else 'buy'
         params_trailing = {
             'callbackRate': str(TRAILING_PERC / 100),
-            'closePosition': True, # <-- Cambiamos reduceOnly por esto para cerrar posición
-            'positionSide': direccion
+            'closePosition': True,
+            'positionSide': direccion,
+            'price': precio_actual # <-- Le entregamos el precio actual exigido por BingX
         }
-        orden_trailing = exchange.create_order(symbol, 'TRAILING_STOP_MARKET', lado_salida, amount=cantidad, params=params_trailing)
+        orden_trailing = exchange.create_order(
+            symbol, 
+            'TRAILING_STOP_MARKET', 
+            lado_salida, 
+            amount=cantidad, 
+            params=params_trailing
+        )
         
         # Guardar estado local
         st.session_state.detalles_operacion = {
