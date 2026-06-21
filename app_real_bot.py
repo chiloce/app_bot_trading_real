@@ -54,7 +54,7 @@ except Exception as e:
     st.error(f"❌ Error crítico de conexión a BingX: {e}")
     st.stop()
     
-# 🚨¡PREPARAMOS LAS VARIABLES DE ESTADO AQUÍ ARRIBA PARA QUE PYTHON LAS CONOZCA DE INMEDIATO!    
+# Variables de estado preparadas desde el inicio
 if 'en_operacion' not in st.session_state:
     st.session_state.en_operacion = False
 if 'detalles_operacion' not in st.session_state:
@@ -71,8 +71,6 @@ if BOT_ENCENDIDO:
 else:
     metrica_estado.warning("🔴 BOT APAGADO | El modo de trading automático está desactivado.")
     monitor_operacion.info("Enciende el bot en la barra lateral para comenzar a buscar entradas.")
-
-
 
 # =====================================================================
 # FUNCIONES DE TRADING (BINGX)
@@ -106,110 +104,30 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         orden_entrada = exchange.create_market_order(symbol, lado_entrada, amount=cantidad, params=params_entrada)
         time.sleep(0.3)
         
-      # 3. Orden de Trailing Stop (Formato Numérico Puro - Request)
+        # 3. Orden de Trailing Stop (Formato Numérico Puro - Request con Debug)
         lado_salida = 'sell' if direccion == 'LONG' else 'buy'
         
-        # Enviamos los datos numéricos como float/int en lugar de strings
         params_nativos = {
-            'symbol': symbol.replace(':USDT', '').replace('/', ''), # Ej: BTCUSDT
+            'symbol': symbol.replace(':USDT', '').replace('/', ''),
             'type': 'TRAILING_STOP_MARKET',
-            'side': lado_salida.upper(),       # 'BUY' o 'SELL'
-            'quantity': float(cantidad),        # <-- Cambiado a número puro (float)
-            'price': float(precio_actual),         # <-- Cambiado a número puro (float)
-            'activationPrice': float(precio_actual), # <-- Cambiado a número puro (float)
-            'callbackRate': str(TRAILING_PERC / 100), # Este sí se mantiene en string por formato de tasa
-            'closePosition': 'true',            # Cierra posición en modo cobertura
-            'positionSide': direccion           # 'LONG' o 'SHORT'
+            'side': lado_salida.upper(),
+            'quantity': float(cantidad),
+            'price': float(precio_actual),
+            'activationPrice': float(precio_actual),
+            'callbackRate': str(TRAILING_PERC / 100),
+            'closePosition': True, # Cambiado a booleano puro (True) requerido por el engine
+            'positionSide': direccion
         }
         
-        orden_trailing = exchange.request(
-            path='swap/v2/trade/order',
-            api='private',
-            method='POST',
-            params=params_nativos
-        )
-        
-        # Guardar estado local
-        st.session_state.detalles_operacion = {
-            "Par": symbol.split('/')[0],
-            "Dirección": direccion,
-            "Precio Entrada": precio_actual,
-            "Cantidad": cantidad,
-            "Valor Nominal": f"${MARGEN_USD * LEVERAGE} USD"
-        }
-        
-        msg = f"🛒 ¡POSICIÓN ABIERTA EN BINGX!\n\nPar: {symbol.split('/')[0]}\nDirección: {direccion}\nPrecio: {precio_actual} USDT\n🎯 Trailing Stop colocado al {TRAILING_PERC}%"
-        enviar_alerta(msg)
-        return True
-    except Exception as e:
-        # Forzamos a Python a extraer el texto completo del error de la API
-        error_completo = getattr(e, 'message', str(e))
-        consola_errores.error(f"❌ BingX rechazó la orden: {error_completo}")
-        return False
-# =====================================================================
-# MOTOR DE ESCANEO CONTINUO (BINGX)
-# =====================================================================
-if BOT_ENCENDIDO:
-    PARES_A_REVISAR = ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", "BNB/USDT:USDT", "XRP/USDT:USDT"]
-
-    if st.session_state.en_operacion:
         try:
-            par_activo = st.session_state.detalles_operacion.get("Par") + "/USDT:USDT"
-            posiciones = exchange.fetch_positions(symbols=[par_activo])
-            if posiciones and float(posiciones[0]['info'].get('positionAmt', 0)) == 0:
-                st.session_state.en_operacion = False
-                enviar_alerta(f"🏁 La posición en {st.session_state.detalles_operacion.get('Par')} ha sido cerrada.")
+            orden_trailing = exchange.request(
+                path='swap/v2/trade/order',
+                api='private',
+                method='POST',
+                params=params_nativos
+            )
         except Exception as e:
-            print(f"Error verificando estado en BingX: {e}")
-
-    if st.session_state.en_operacion:
-        df_op = pd.DataFrame([st.session_state.detalles_operacion])
-        monitor_operacion.dataframe(df_op, use_container_width=True)
-    else:
-        monitor_operacion.info("Vigilando los pares en BingX... Esperando condiciones de mercado.")
-
-    try:
-        datos_consola = []
-        for symbol in PARES_A_REVISAR:
-            if st.session_state.en_operacion:
-                break
-                
-            velas = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=2)
-            if len(velas) < 2: continue
-            
-            vela_actual = velas[-1]
-            precio_apertura = vela_actual[1]
-            precio_actual = vela_actual[4]
-            volumen_vela = vela_actual[5] * precio_actual
-            
-            variacion = ((precio_actual - precio_apertura) / precio_apertura) * 100
-            
-            datos_consola.append({
-                "Moneda": symbol.split('/')[0],
-                "Precio Actual": f"{precio_actual} USDT",
-                "Variación Vela": f"{variacion:.3f}%",
-                "Volumen": f"${volumen_vela:,.0f} USD"
-            })
-            
-            if volumen_vela < VOLUMEN_MINIMO:
-                continue
-            
-            direccion = None
-            if variacion >= UMBRAL:
-                direccion = "LONG"
-            elif variacion <= -UMBRAL:
-                direccion = "SHORT"
-
-            if direccion and not st.session_state.en_operacion:
-                if abrir_posicion_con_trailing(symbol, direccion, precio_actual):
-                    st.session_state.en_operacion = True
-                    st.rerun()
-                    
-        df_consola = pd.DataFrame(datos_consola)
-        consola_monitoreo.dataframe(df_consola, use_container_width=True)
-
-    except Exception as e:
-        consola_errores.error(f"❌ Error leyendo mercado en BingX: {e}")
-
-    time.sleep(5)
-    st.rerun()
+            error_msg = str(e)
+            if hasattr(e, 'feedback'):
+                error_msg = f"{e.feedback}"
+            elif hasattr(exchange, 'last_json_response') and exchange.last_json_response:
