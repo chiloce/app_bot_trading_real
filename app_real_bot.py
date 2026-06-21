@@ -19,8 +19,8 @@ def enviar_alerta(mensaje):
 # =====================================================================
 # INTERFAZ WEB (STREAMLIT)
 # =====================================================================
-st.set_page_config(page_title="Crypto Execution Bot", layout="wide")
-st.title("⚡ Bot de Ejecución Automatizada (Demo Trading)")
+st.set_page_config(page_title="Crypto Execution Bot (BingX)", layout="wide")
+st.title("⚡ Bot de Ejecución Automatizada (BingX)")
 st.subheader("Entradas automáticas con Trailing Stop guiado")
 
 # CONFIGURACIÓN DE LA BARRA LATERAL
@@ -30,27 +30,21 @@ TIMEFRAME = st.sidebar.selectbox("Temporalidad de Análisis", ["15m", "4h"], ind
 UMBRAL = st.sidebar.slider("Umbral de Disparo (%)", min_value=0.1, max_value=5.0, value=1.0, step=0.1)
 MARGEN_USD = st.sidebar.number_input("Margen de Entrada (USD)", min_value=1.0, value=5.0, step=1.0)
 LEVERAGE = st.sidebar.number_input("Apalancamiento (X)", min_value=1, max_value=25, value=10, step=1)
-VOLUMEN_MINIMO = st.sidebar.number_input("Volumen mínimo en vela (USDT)", value=100000, step=50000) # <-- VOLVEMOS A AGREGARLO
+VOLUMEN_MINIMO = st.sidebar.number_input("Volumen mínimo en vela (USDT)", value=100000, step=50000)
 TRAILING_PERC = st.sidebar.slider("Trailing Stop (%)", min_value=0.5, max_value=5.0, value=1.5, step=0.1)
 
 # =====================================================================
-# CONEXIÓN INTEGRAL BLINDADA PARA STREAMLIT CLOUD (CORREGIDO)
+# CONEXIÓN NATIVA A BINGX (FUTUROS PERPETUOS)
 # =====================================================================
-exchange = ccxt.binance({
-    'apiKey': st.secrets["API_KEY_TESTNET"],
-    'secret': st.secrets["SECRET_KEY_TESTNET"],
+# NOTA: Asegúrate de reemplazar tus secretos en Streamlit Cloud con tus llaves de BingX
+exchange = ccxt.bingx({
+    'apiKey': st.secrets["API_KEY_TESTNET"], # Pon aquí tu API Key de BingX
+    'secret': st.secrets["SECRET_KEY_TESTNET"], # Pon aquí tu Secret Key de BingX
     'enableRateLimit': True,
     'options': {
-        'defaultType': 'future',
-        'adjustForTimeDifference': True
+        'defaultType': 'swap', # 'swap' es el término que usa BingX para Futuros Perpetuos
     }
 })
-
-# NOTA CRÍTICA: En lugar de usar set_sandbox_mode o cambiar todo el diccionario,
-# reescribimos únicamente las rutas exactas de Futuros Perpetuos (fapi).
-# Esto evita que CCXT busque 'sapi' y se rompa.
-exchange.urls['api']['public'] = 'https://testnet.binancefuture.com/fapi/v1'
-exchange.urls['api']['private'] = 'https://testnet.binancefuture.com/fapi/v1'
 
 # Contenedores visuales en la interfaz
 metrica_estado = st.empty()
@@ -58,7 +52,7 @@ monitor_operacion = st.empty()
 consola_errores = st.empty()
 
 if BOT_ENCENDIDO:
-    metrica_estado.success(f"🟢 BOT ENCENDIDO | Analizando [{TIMEFRAME}] esperando {UMBRAL}% y Vol > {VOLUMEN_MINIMO} USDT...")
+    metrica_estado.success(f"🟢 BOT ENCENDIDO | Analizando BingX [{TIMEFRAME}] esperando {UMBRAL}%...")
 else:
     metrica_estado.warning("🔴 BOT APAGADO | El modo de trading automático está desactivado.")
     monitor_operacion.info("Enciende el bot en la barra lateral para comenzar a buscar entradas.")
@@ -69,7 +63,7 @@ if 'detalles_operacion' not in st.session_state:
     st.session_state.detalles_operacion = {}
 
 # =====================================================================
-# FUNCIONES DE TRADING
+# FUNCIONES DE TRADING (BINGX)
 # =====================================================================
 def calcular_cantidad_contratos(symbol, precio_actual):
     try:
@@ -87,7 +81,7 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         cantidad = calcular_cantidad_contratos(symbol, precio_actual)
         if cantidad == 0: return False
         
-        # 1. Configurar Apalancamiento
+        # 1. Configurar Apalancamiento en BingX
         exchange.set_leverage(int(LEVERAGE), symbol)
         time.sleep(0.5)
         
@@ -96,57 +90,56 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         orden_entrada = exchange.create_market_order(symbol, lado_entrada, quantity=cantidad)
         time.sleep(0.5)
         
-        # 3. Orden de Trailing Stop Relativa
+        # 3. Orden de Trailing Stop
+        # Nota: BingX maneja el Trailing de forma nativa mediante parámetros adicionales o create_order
         lado_salida = 'sell' if direccion == 'LONG' else 'buy'
         params_trailing = {
-            'callbackRate': TRAILING_PERC,
+            'callbackRate': str(TRAILING_PERC / 100), # BingX suele requerir el porcentaje en decimal (ej: 0.015)
             'reduceOnly': True
         }
         orden_trailing = exchange.create_order(symbol, 'TRAILING_STOP_MARKET', lado_salida, quantity=cantidad, params=params_trailing)
         
         # Guardar estado local
         st.session_state.detalles_operacion = {
-            "Par": symbol.split(':')[0],
+            "Par": symbol.split('/')[0],
             "Dirección": direccion,
             "Precio Entrada": precio_actual,
             "Cantidad": cantidad,
             "Valor Nominal": f"${MARGEN_USD * LEVERAGE} USD"
         }
         
-        msg = f"🛒 ¡POSICIÓN ABIERTA EN DEMO TRADING!\n\nPar: {symbol.split(':')[0]}\nDirección: {direccion}\nPrecio: {precio_actual} USDT\n🎯 Trailing Stop colocado al {TRAILING_PERC}%"
+        msg = f"🛒 ¡POSICIÓN ABIERTA EN BINGX!\n\nPar: {symbol.split('/')[0]}\nDirección: {direccion}\nPrecio: {precio_actual} USDT\n🎯 Trailing Stop colocado al {TRAILING_PERC}%"
         enviar_alerta(msg)
         return True
     except Exception as e:
-        consola_errores.error(f"❌ Binance Demo rechazó la orden: {e}")
+        consola_errores.error(f"❌ BingX rechazó u omitió la orden: {e}")
         return False
 
 # =====================================================================
-# MOTOR DE ESCANEO CONTINUO
+# MOTOR DE ESCANEO CONTINUO (BINGX)
 # =====================================================================
 if BOT_ENCENDIDO:
-    # Lista de monedas principales de alta liquidez en la Demo
-    PARES_A_REVISAR = ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", "BNB/USDT:USDT", "XRP/USDT:USDT"]
+    # Pares principales en formato nativo de CCXT para BingX
+    PARES_A_REVISAR = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT"]
 
     if st.session_state.en_operacion:
         try:
-            par_activo = st.session_state.detalles_operacion.get("Par")
-            if ":" not in par_activo: par_activo = f"{par_activo}:USDT"
-                
+            par_activo = st.session_state.detalles_operacion.get("Par") + "/USDT"
             posiciones = exchange.fetch_positions(symbols=[par_activo])
+            # Si no hay posiciones activas reportadas por la API, liberamos el bot
             if posiciones and float(posiciones[0]['info'].get('positionAmt', 0)) == 0:
                 st.session_state.en_operacion = False
-                enviar_alerta(f"🏁 La posición en {par_activo.split(':')[0]} ha sido cerrada por el Trailing Stop.")
+                enviar_alerta(f"🏁 La posición en {par_activo.split('/')[0]} ha sido cerrada.")
         except Exception as e:
-            print(f"Error verificando estado de la posición: {e}")
+            print(f"Error verificando estado en BingX: {e}")
 
     if st.session_state.en_operacion:
         df_op = pd.DataFrame([st.session_state.detalles_operacion])
         monitor_operacion.dataframe(df_op, use_container_width=True)
     else:
-        monitor_operacion.info("Vigilando los pares principales... Esperando condiciones de volumen y porcentaje.")
+        monitor_operacion.info("Vigilando los pares en BingX... Esperando condiciones de mercado.")
 
     try:
-        # Escaneo de velas
         for symbol in PARES_A_REVISAR:
             if st.session_state.en_operacion:
                 break
@@ -157,11 +150,10 @@ if BOT_ENCENDIDO:
             vela_actual = velas[-1]
             precio_apertura = vela_actual[1]
             precio_actual = vela_actual[4]
-            volumen_vela = vela_actual[5] * precio_actual # Cálculo aproximado del volumen de la vela en USDT
+            volumen_vela = vela_actual[5] * precio_actual
             
             variacion = ((precio_actual - precio_apertura) / precio_apertura) * 100
             
-            # FILTRO DE VOLUMEN INTEGRADO EN EL ESCANEO DE VELAS
             if volumen_vela < VOLUMEN_MINIMO:
                 continue
             
@@ -177,7 +169,7 @@ if BOT_ENCENDIDO:
                     st.rerun()
 
     except Exception as e:
-        consola_errores.error(f"❌ Error leyendo mercado: {e}")
+        consola_errores.error(f"❌ Error leyendo mercado en BingX: {e}")
 
-    time.sleep(6)
+    time.sleep(8)
     st.rerun()
