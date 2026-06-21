@@ -79,17 +79,27 @@ st.subheader("📜 Historial de Operaciones Cerradas")
 tabla_historial = st.empty()
 consola_errores = st.empty()
 
-# MÓDULO DE ACTUALIZACIÓN DE BALANCE (VST)
+# MÓDULO DE ACTUALIZACIÓN DE BALANCE (VST) - BLINDADO CONTRA ERRORES DE INDICE
 try:
     balance = exchange.fetch_balance(params={'currency': 'VST'})
-    vst_libre = float(balance['info']['data']['balance']['availableMargin'])
-    vst_total = float(balance['info']['data']['balance']['equity'])
+    # Extracción segura usando CCXT unificado primero, si falla va al info crudo de forma tolerante
+    vst_libre = float(balance.get('free', {}).get('VST', 0.0))
+    vst_total = float(balance.get('total', {}).get('VST', 0.0))
     
+    if vst_total == 0.0 and 'info' in balance and 'data' in balance['info']:
+        data_bal = balance['info']['data']
+        if isinstance(data_bal, dict) and 'balance' in data_bal:
+            vst_libre = float(data_bal['balance'].get('availableMargin', 0.0))
+            vst_total = float(data_bal['balance'].get('equity', 0.0))
+        elif isinstance(data_bal, list) and len(data_bal) > 0:
+            vst_libre = float(data_bal[0].get('availableMargin', 0.0))
+            vst_total = float(data_bal[0].get('equity', 0.0))
+
     p1.metric(label="💰 Capital Total (VST)", value=f"{vst_total:,.2f} VST")
     p2.metric(label="🔓 Margen Disponible", value=f"{vst_libre:,.2f} VST")
     p3.metric(label="🔄 Ranuras Usadas", value=f"{len(st.session_state.operaciones_activas)} de 10 abiertas")
 except Exception as e:
-    print(f"Error cargando balance VST: {e}")
+    consola_errores.error(f"⚠️ Aviso balance VST: {e}")
 
 if BOT_ENCENDIDO:
     metrica_estado.success(f"🟢 BOT ENCENDIDO | Escaneando el mercado a alta velocidad sin bloqueos...")
@@ -124,7 +134,6 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         params_entrada = { 'marginType': 'VST', 'positionSide': direccion } 
         orden_entrada = exchange.create_market_order(symbol, lado_entrada, amount=cantidad, params=params_entrada)
         
-        # Corrección de decimales estricta para el stop inicial
         if direccion == "LONG":
             stop_sucio = precio_actual * (1 - (TRAILING_PERC / 100))
         else:
@@ -155,40 +164,42 @@ if BOT_ENCENDIDO:
 
     dict_sincronizado = {}
 
-    # SINCRONIZACIÓN DIRECTA DESDE EXCHANGE
+    # SINCRONIZACIÓN DIRECTA DESDE EXCHANGE BLINDADA
     try:
         posiciones_exchange = exchange.fetch_positions()
-        for pos in posiciones_exchange:
-            cantidad_ex = float(pos.get('contracts', 0))
-            if cantidad_ex > 0:
-                symbol_ex = pos.get('symbol')
-                token_ex = symbol_ex.split('/')[0]
-                
-                if symbol_ex in PARES_A_REVISAR:
-                    direccion_ex = pos.get('side').upper()
-                    precio_entrada_ex = float(pos.get('entryPrice'))
-                    precio_actual_ex = float(pos.get('markPrice', precio_entrada_ex))
+        if isinstance(posiciones_exchange, list):
+            for pos in posiciones_exchange:
+                cantidad_ex = float(pos.get('contracts', 0) if pos.get('contracts') is not None else 0)
+                if cantidad_ex > 0:
+                    symbol_ex = pos.get('symbol')
+                    if not symbol_ex: continue
+                    token_ex = symbol_ex.split('/')[0]
                     
-                    if token_ex in st.session_state.operaciones_activas:
-                        dict_sincronizado[token_ex] = st.session_state.operaciones_activas[token_ex]
-                    else:
-                        if direccion_ex == "LONG":
-                            stop_sucio = precio_actual_ex * (1 - (TRAILING_PERC / 100))
-                        else:
-                            stop_sucio = precio_actual_ex * (1 + (TRAILING_PERC / 100))
+                    if symbol_ex in PARES_A_REVISAR:
+                        direccion_ex = pos.get('side', '').upper()
+                        precio_entrada_ex = float(pos.get('entryPrice', 0))
+                        precio_actual_ex = float(pos.get('markPrice', precio_entrada_ex))
                         
-                        stop_inicial = float(exchange.price_to_precision(symbol_ex, stop_sucio))
+                        if token_ex in st.session_state.operaciones_activas:
+                            dict_sincronizado[token_ex] = st.session_state.operaciones_activas[token_ex]
+                        else:
+                            if direccion_ex == "LONG":
+                                stop_sucio = precio_actual_ex * (1 - (TRAILING_PERC / 100))
+                            else:
+                                stop_sucio = precio_actual_ex * (1 + (TRAILING_PERC / 100))
                             
-                        dict_sincronizado[token_ex] = {
-                            "Par": token_ex, "Symbol_Completo": symbol_ex, "Dirección": direccion_ex, "Precio Entrada": precio_entrada_ex,
-                            "Cantidad": cantidad_ex, "Valor Nominal": f"${cantidad_ex * precio_entrada_ex:.1f} USD",
-                            "Trailing Stop Activo": stop_inicial, "Precio Máximo Alcanzado": float(precio_actual_ex)
-                        }
-        st.session_state.operaciones_activas = dict_sincronizado
+                            stop_inicial = float(exchange.price_to_precision(symbol_ex, stop_sucio))
+                                
+                            dict_sincronizado[token_ex] = {
+                                "Par": token_ex, "Symbol_Completo": symbol_ex, "Dirección": direccion_ex, "Precio Entrada": precio_entrada_ex,
+                                "Cantidad": cantidad_ex, "Valor Nominal": f"${cantidad_ex * precio_entrada_ex:.1f} USD",
+                                "Trailing Stop Activo": stop_inicial, "Precio Máximo Alcanzado": float(precio_actual_ex)
+                            }
+            st.session_state.operaciones_activas = dict_sincronizado
     except Exception as e:
-        print(f"Error sincronización: {e}")
+        print(f"Error sincronización pos: {e}")
 
-    # GESTIÓN Y MONITOR DE TRAILING STOP (CON PRECISIÓN DE REDONDEO)
+    # GESTIÓN Y MONITOR DE TRAILING STOP
     tokens_abiertos = list(st.session_state.operaciones_activas.keys())
     for token in tokens_abiertos:
         try:
@@ -214,7 +225,6 @@ if BOT_ENCENDIDO:
                         st.session_state.operaciones_activas[token]["Trailing Stop Activo"] = nuevo_stop
                 
                 if precio_vivo <= stop_actual:
-                    # Cierre de mercado forzando la cantidad precisa
                     exchange.create_market_order(symbol_activo, 'sell', amount=cantidad, params={'marginType': 'VST', 'positionSide': 'LONG'})
                     del st.session_state.operaciones_activas[token]
                     pnl = (precio_vivo - precio_entrada) * cantidad
@@ -253,11 +263,12 @@ if BOT_ENCENDIDO:
             df_op["Cerrar Trade"] = False
             columnas_orden = ["Par", "Dirección", "Precio Entrada", "Cantidad", "Valor Nominal", "Trailing Stop Activo", "Precio Máximo Alcanzado", "Cerrar Trade"]
             
+            # Corregido use_container_width por width='stretch'
             evento_cierre = st.data_editor(
                 df_op[columnas_orden],
                 column_config={"Cerrar Trade": st.column_config.CheckboxColumn("Cerrar de Emergencia", default=False)},
                 disabled=["Par", "Dirección", "Precio Entrada", "Cantidad", "Valor Nominal", "Trailing Stop Activo", "Precio Máximo Alcanzado"],
-                use_container_width=True, key="editor_posiciones"
+                width='stretch', key="editor_posiciones"
             )
             
             for i, row in evento_cierre.iterrows():
@@ -281,7 +292,6 @@ if BOT_ENCENDIDO:
     datos_consola = []
     
     try:
-        # Descarga masiva ultra ligera (toda la info en 1 sola llamada de red)
         tickers = exchange.fetch_tickers(PARES_A_REVISAR)
         
         pares_candidatos = []
@@ -291,7 +301,6 @@ if BOT_ENCENDIDO:
                 variacion_24h = float(tickers[symbol]['percentage']) if tickers[symbol]['percentage'] is not None else 0.0
                 pares_candidatos.append((symbol, abs(variacion_24h)))
         
-        # Filtramos estrictamente el Top 15 con más movimiento diario para pintar la interfaz
         pares_candidatos = sorted(pares_candidatos, key=lambda x: x[1], reverse=True)[:15]
         top_15_symbols = [p[0] for p in pares_candidatos]
 
@@ -302,7 +311,6 @@ if BOT_ENCENDIDO:
                 variacion_24h = float(tickers[symbol]['percentage']) if tickers[symbol]['percentage'] is not None else 0.0
                 volumen_24h = float(tickers[symbol]['baseVolume']) * precio_actual if tickers[symbol]['baseVolume'] is not None else 0.0
                 
-                # Descargamos la vela de 15m SOLO para estas 15 monedas (completamente seguro contra rate-limits)
                 velas = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=2)
                 if len(velas) < 2: continue
                 
@@ -343,7 +351,8 @@ if BOT_ENCENDIDO:
             df_consola = df_consola.sort_values(by="Var_Abs", ascending=False).drop(columns=["Var_Abs"])
             
             df_consola["Variación Vela (15m)"] = df_consola["Variación Vela (15m)"].map(lambda x: f"{x:+.3f}%")
-            consola_monitoreo.dataframe(df_consola, use_container_width=True)
+            # Corregido use_container_width por width='stretch'
+            consola_monitoreo.dataframe(df_consola, width='stretch')
 
     except Exception as e:
         print(f"Error crítico en escaneo masivo: {e}")
@@ -351,7 +360,8 @@ if BOT_ENCENDIDO:
 # PINTAR EL HISTORIAL DE TRADES
 if st.session_state.historial_trades:
     df_historial = pd.DataFrame(st.session_state.historial_trades)
-    tabla_historial.dataframe(df_historial, use_container_width=True)
+    # Corregido use_container_width por width='stretch'
+    tabla_historial.dataframe(df_historial, width='stretch')
 else:
     tabla_historial.info("Aún no hay operaciones cerradas en esta sesión.")
 
