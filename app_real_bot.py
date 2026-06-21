@@ -103,26 +103,26 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         orden_entrada = exchange.create_market_order(symbol, lado_entrada, amount=cantidad, params=params_entrada)
         time.sleep(0.3)
         
-       # 3. Orden de Trailing Stop (Formato Plano para BingX Sandbox)
+       # 3. Orden de Trailing Stop (Usando el método nativo de CCXT para BingX)
         lado_salida = 'sell' if direccion == 'LONG' else 'buy'
         
-        # Estructura limpia requerida por CCXT para BingX en modo Cobertura Sandbox:
-        # Se le envía 'price=precio_actual' (que actúa como activationPrice)
-        # y los parámetros específicos se pasan planos en el diccionario principal.
+        # Estructuramos los parámetros exactos que exige el endpoint nativo de BingX
         params_trailing = {
-            'callbackRate': str(TRAILING_PERC / 100), # Porcentaje en decimal (ej: 0.015)
-            'closePosition': True,                     # Cierra posición en modo cobertura
-            'positionSide': direccion                  # 'LONG' o 'SHORT'
+            'callbackRate': str(TRAILING_PERC / 100), # Porcentaje (ej: 0.02)
+            'closePosition': True,                     # Cerrar posición en modo cobertura
+            'positionSide': direccion,                  # 'LONG' o 'SHORT'
+            'activationPrice': str(precio_actual)      # Activación inmediata al precio actual
         }
         
-        orden_trailing = exchange.create_order(
-            symbol=symbol,
-            type='TRAILING_STOP_MARKET',
-            side=lado_salida,
-            amount=cantidad,
-            price=precio_actual, 
-            params=params_trailing
-        )
+        # Usamos 'privatePostSwapV2TradeOrder' que habla directo con la API de BingX sin filtros
+        orden_trailing = exchange.privatePostSwapV2TradeOrder({
+            'symbol': symbol.replace(':USDT', '').replace('/', ''), # Formato nativo (ej: BTC-USDT o BTCUSDT)
+            'type': 'TRAILING_STOP_MARKET',
+            'side': lado_salida.upper(), # 'BUY' o 'SELL'
+            'quantity': str(cantidad),
+            'price': str(precio_actual), # Duplicamos aquí por seguridad para cumplir la validación
+            **params_trailing
+        })
         
         # Guardar estado local
         st.session_state.detalles_operacion = {
