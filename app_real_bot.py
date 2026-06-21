@@ -306,4 +306,16 @@ if BOT_ENCENDIDO:
                 
     if datos_consola:
         df_consola = pd.DataFrame(datos_consola)
-        consola_monitoreo.dataframe(df_cons
+        consola_monitoreo.dataframe(df_consola, use_container_width=True)
+
+# PINTAR EL HISTORIAL DE TRADES
+if st.session_state.historial_trades:
+    df_historial = pd.DataFrame(st.session_state.historial_trades)
+    tabla_historial.dataframe(df_historial, use_container_width=True)
+else:
+    tabla_historial.info("Aún no hay operaciones cerradas en esta sesión.")
+
+# REFRESCAR CON SEGURIDAD CADA 5 SEGUNDOS
+if BOT_ENCENDIDO:
+    time.sleep(5)
+    st.rerun()
