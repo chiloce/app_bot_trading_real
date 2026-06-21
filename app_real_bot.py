@@ -53,6 +53,12 @@ try:
 except Exception as e:
     st.error(f"❌ Error crítico de conexión a BingX: {e}")
     st.stop()
+    
+# 🚨¡PREPARAMOS LAS VARIABLES DE ESTADO AQUÍ ARRIBA PARA QUE PYTHON LAS CONOZCA DE INMEDIATO!    
+if 'en_operacion' not in st.session_state:
+    st.session_state.en_operacion = False
+if 'detalles_operacion' not in st.session_state:
+    st.session_state.detalles_operacion = {}
 
 # Contenedores visuales estables
 metrica_estado = st.empty()
@@ -66,10 +72,7 @@ else:
     metrica_estado.warning("🔴 BOT APAGADO | El modo de trading automático está desactivado.")
     monitor_operacion.info("Enciende el bot en la barra lateral para comenzar a buscar entradas.")
 
-if 'en_operacion' not in st.session_state:
-    st.session_state.en_operacion = False
-if 'detalles_operacion' not in st.session_state:
-    st.session_state.detalles_operacion = {}
+
 
 # =====================================================================
 # FUNCIONES DE TRADING (BINGX)
@@ -103,23 +106,22 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         orden_entrada = exchange.create_market_order(symbol, lado_entrada, amount=cantidad, params=params_entrada)
         time.sleep(0.3)
         
-       # 3. Orden de Trailing Stop (Llamada Directa por Request - Blindada)
+      # 3. Orden de Trailing Stop (Formato Numérico Puro - Request)
         lado_salida = 'sell' if direccion == 'LONG' else 'buy'
         
-        # Preparamos los parámetros nativos exactos en el formato crudo que exige BingX
+        # Enviamos los datos numéricos como float/int en lugar de strings
         params_nativos = {
             'symbol': symbol.replace(':USDT', '').replace('/', ''), # Ej: BTCUSDT
             'type': 'TRAILING_STOP_MARKET',
             'side': lado_salida.upper(),       # 'BUY' o 'SELL'
-            'quantity': str(cantidad),
-            'price': str(precio_actual),         # Activación inicial
-            'activationPrice': str(precio_actual), # Activación duplicada requerida en Testnet
-            'callbackRate': str(TRAILING_PERC / 100), # Porcentaje en decimal (ej: 0.015)
-            'closePosition': 'true',            # Cierra posición en modo cobertura (en texto)
+            'quantity': float(cantidad),        # <-- Cambiado a número puro (float)
+            'price': float(precio_actual),         # <-- Cambiado a número puro (float)
+            'activationPrice': float(precio_actual), # <-- Cambiado a número puro (float)
+            'callbackRate': str(TRAILING_PERC / 100), # Este sí se mantiene en string por formato de tasa
+            'closePosition': 'true',            # Cierra posición en modo cobertura
             'positionSide': direccion           # 'LONG' o 'SHORT'
         }
         
-        # Usamos el método request universal apuntando al endpoint de órdenes de la API v2 de Swap
         orden_trailing = exchange.request(
             path='swap/v2/trade/order',
             api='private',
