@@ -34,7 +34,7 @@ VOLUMEN_MINIMO = st.sidebar.number_input("Volumen mínimo en vela (USDT)", value
 TRAILING_PERC = st.sidebar.slider("Trailing Stop (%)", min_value=0.5, max_value=5.0, value=1.5, step=0.1)
 
 # =====================================================================
-# CONEXIÓN BLINDADA CONTRA RESTRICCIONES GEOGRÁFICAS (NUBE)
+# CONEXIÓN INTEGRAL BLINDADA PARA STREAMLIT CLOUD (CORREGIDO)
 # =====================================================================
 exchange = ccxt.binance({
     'apiKey': st.secrets["API_KEY_TESTNET"],
@@ -46,12 +46,11 @@ exchange = ccxt.binance({
     }
 })
 
-# Forzamos manualmente el diccionario de URLs internas de CCXT
-# para que tanto las peticiones públicas como privadas apunten a la Testnet libre.
-exchange.urls['api'] = {
-    'public': 'https://testnet.binancefuture.com/fapi/v1',
-    'private': 'https://testnet.binancefuture.com/fapi/v1',
-}
+# NOTA CRÍTICA: En lugar de usar set_sandbox_mode o cambiar todo el diccionario,
+# reescribimos únicamente las rutas exactas de Futuros Perpetuos (fapi).
+# Esto evita que CCXT busque 'sapi' y se rompa.
+exchange.urls['api']['public'] = 'https://testnet.binancefuture.com/fapi/v1'
+exchange.urls['api']['private'] = 'https://testnet.binancefuture.com/fapi/v1'
 
 # Contenedores visuales en la interfaz
 metrica_estado = st.empty()
