@@ -142,9 +142,10 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         enviar_alerta(msg)
         return True
     except Exception as e:
-        consola_errores.error(f"❌ BingX rechazó la orden: {e}")
+        # Forzamos a Python a extraer el texto completo del error de la API
+        error_completo = getattr(e, 'message', str(e))
+        consola_errores.error(f"❌ BingX rechazó la orden: {error_completo}")
         return False
-
 # =====================================================================
 # MOTOR DE ESCANEO CONTINUO (BINGX)
 # =====================================================================
