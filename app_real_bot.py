@@ -157,20 +157,22 @@ if BOT_ENCENDIDO:
     PARES_A_REVISAR = ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", "BNB/USDT:USDT", "XRP/USDT:USDT"]
     dict_sincronizado = {}
 
-    # 1. ETAPA DE IMPORTACIÓN REAL DESDE BINGX
+    # 1. ETAPA DE IMPORTACIÓN REAL DESDE BINGX (CORREGIDA PARA LEER AISLADO/CRUZADO)
     try:
         posiciones_exchange = exchange.fetch_positions()
         
         for pos in posiciones_exchange:
             info = pos.get('info', {})
-            if info.get('marginType') == 'VST' and float(pos.get('contracts', 0)) > 0:
+            # Flexibilizamos el filtro para que lea cualquier posición activa con contratos > 0 en la Testnet
+            cantidad_ex = float(pos.get('contracts', 0))
+            
+            if cantidad_ex > 0:
                 symbol_ex = pos.get('symbol')
                 token_ex = symbol_ex.split('/')[0]
                 
                 if symbol_ex in PARES_A_REVISAR:
                     direccion_ex = pos.get('side').upper()
                     precio_entrada_ex = float(pos.get('entryPrice'))
-                    cantidad_ex = float(pos.get('contracts'))
                     precio_actual_ex = float(pos.get('markPrice', precio_entrada_ex))
                     
                     if token_ex in st.session_state.operaciones_activas:
@@ -191,7 +193,6 @@ if BOT_ENCENDIDO:
                             "Trailing Stop Activo": float(stop_inicial),
                             "Precio Máximo Alcanzado": float(precio_actual_ex)
                         }
-                        # SILENCIADA LA ALERTA DE TELEGRAM AQUÍ PARA EVITAR SPAM EN REINICIOS
                         
         st.session_state.operaciones_activas = dict_sincronizado
 
