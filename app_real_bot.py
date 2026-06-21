@@ -43,8 +43,12 @@ if 'exchange' not in st.session_state:
         'enableRateLimit': True,
         'options': {'defaultType': 'swap'}
     })
+    
+    # FORZAMOS A CCXT A CONECTARSE AL ENTORNO DE SIMULACIÓN VST DE BINGX
+    st.session_state.exchange.set_sandbox_mode(True) 
+    
     try:
-        st.session_state.exchange.load_markets() # Se cargan una sola vez en memoria
+        st.session_state.exchange.load_markets()
     except Exception as e:
         print(f"Error inicial cargando mercados: {e}")
 
