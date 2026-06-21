@@ -127,7 +127,12 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
                 params=params_nativos
             )
         except Exception as e:
+            # Si ccxt falla internamente, extraemos la respuesta cruda de BingX
             error_msg = str(e)
             if hasattr(e, 'feedback'):
                 error_msg = f"{e.feedback}"
             elif hasattr(exchange, 'last_json_response') and exchange.last_json_response:
+                error_msg = f"{exchange.last_json_response}" # <-- ASEGÚRATE DE QUE ESTA LÍNEA TENGA SUS ESPACIOS HACIA LA DERECHA
+            
+            consola_errores.error(f"❌ Error detallado en Trailing Stop: {error_msg}")
+            return False
