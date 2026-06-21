@@ -270,49 +270,60 @@ if BOT_ENCENDIDO:
         else:
             st.info("Sincronizado. Sin posiciones abiertas en BingX en este momento.")
 
-    # 🔍 PASO 3: ESCANEO GENERAL MASIVO DE MERCADO
+    # 🔍 PASO 3: ESCANEO GENERAL DE MERCADO (CORREGIDO PARA MEDIR VELA DE 15M EXACTA)
     datos_consola = []
-    # Para agilizar la interfaz web en cargas masivas, ordenamos los tickers de golpe
-    try:
-        tickers = exchange.fetch_tickers(PARES_A_REVISAR)
-        for symbol in PARES_A_REVISAR:
-            try:
-                token_curr = symbol.split('/')[0]
-                if symbol not in tickers: continue
+    
+    # Escaneamos con fetch_ohlcv para asegurar que medimos la apertura de la vela de 15m elegida
+    for symbol in PARES_A_REVISAR:
+        try:
+            token_curr = symbol.split('/')[0]
+            
+            # Pedimos las últimas 2 velas de la temporalidad seleccionada (15m)
+            velas = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=2)
+            if len(velas) < 2: continue
+            
+            vela_actual = velas[-1]
+            precio_apertura = float(vela_actual[1]) # Precio donde abrió ESTA vela de 15m
+            precio_actual = float(vela_actual[4])   # Precio en vivo actual
+            volumen_vela = float(vela_actual[5]) * precio_actual # Volumen de esta vela
+            
+            # Cálculo milimétrico basado estrictamente en la vela en curso
+            variacion_vela_real = ((precio_actual - precio_apertura) / precio_apertura) * 100
+            
+            datos_consola.append({
+                "Moneda": token_curr, 
+                "Precio Actual": f"{precio_actual} USDT",
+                "Variación Vela": variacion_vela_real, 
+                "Volumen": volumen_vela
+            })
+            
+            # Restricciones multitrade
+            if token_curr in st.session_state.operaciones_activas or len(st.session_state.operaciones_activas) >= 10:
+                continue
                 
-                precio_actual = float(tickers[symbol]['last'])
-                # Usamos los datos agregados por el ticker de 24h para calcular variaciones rápidas
-                variacion = float(tickers[symbol]['percentage']) if tickers[symbol]['percentage'] is not None else 0.0
-                volumen_24h = float(tickers[symbol]['baseVolume']) * precio_actual if tickers[symbol]['baseVolume'] is not None else 0.0
-                
-                # Guardamos los datos para pintar la consola de monitoreo
-                datos_consola.append({
-                    "Moneda": token_curr, "Precio Actual": f"{precio_actual} USDT",
-                    "Variación 24h": variacion, "Volumen": volumen_24h
-                })
-                
-                if token_curr in st.session_state.operaciones_activas or len(st.session_state.operaciones_activas) >= 10:
-                    continue
-                    
-                if volumen_24h < VOLUMEN_MINIMO:
-                    continue
-                
-                direccion_disparo = None
-                if variacion >= UMBRAL: direccion_disparo = "LONG"
-                elif variacion <= -UMBRAL: direccion_disparo = "SHORT"
+            if volumen_vela < VOLUMEN_MINIMO:
+                continue
+            
+            direccion_disparo = None
+            if variacion_vela_real >= UMBRAL: 
+                direccion_disparo = "LONG"
+            elif variacion_vela_real <= -UMBRAL: 
+                direccion_disparo = "SHORT"
 
-                if direccion_disparo:
-                    if abrir_posicion_con_trailing(symbol, direccion_disparo, precio_actual):
-                        st.rerun()
-            except Exception as e: continue
-    except Exception as e:
-        print(f"Error en consulta de masiva: {e}")
+            if direccion_disparo:
+                if abrir_posicion_con_trailing(symbol, direccion_disparo, precio_actual):
+                    st.rerun()
+        except Exception as e: 
+            continue
                 
     if datos_consola:
-        # Mostramos las monedas ordenadas por mayor movimiento absoluto en la tabla en vivo
         df_consola = pd.DataFrame(datos_consola)
-        df_consola["Variación Absoluta"] = df_consola["Variación 24h"].abs()
-        df_consola = df_consola.sort_values(by="Variación Absoluta", ascending=False).drop(columns=["Variación Absoluta"])
+        df_consola["Var_Abs"] = df_consola["Variación Vela"].abs()
+        df_consola = df_consola.sort_values(by="Var_Abs", ascending=False).drop(columns=["Var_Abs"])
+        
+        df_consola["Variación Vela"] = df_consola["Variación Vela"].map(lambda x: f"{x:+.3f}%")
+        df_consola["Volumen"] = df_consola["Volumen"].map(lambda x: f"${x:,.0f} USD")
+        consola_monitoreo.dataframe(df_consola.head(15), use_container_width=True)
         
         # Formateamos visualmente para que se vea limpio
         df_consola["Variación 24h"] = df_consola["Variación 24h"].map(lambda x: f"{x:+.2f}%")
