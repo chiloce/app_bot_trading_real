@@ -85,9 +85,18 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         exchange.set_leverage(int(LEVERAGE), symbol)
         time.sleep(0.5)
         
-        # 2. Orden de Entrada a Mercado
+        # 2. Lanzar Orden de Entrada a Mercado usando saldo Demo (VST)
         lado_entrada = 'buy' if direccion == 'LONG' else 'sell'
-        orden_entrada = exchange.create_market_order(symbol, lado_entrada, quantity=cantidad)
+        
+        # AGREGAMOS EL PARÁMETRO EXTRA PARA FORZAR FONDOS VIRTUALES
+        params_entrada = {'marginType': 'VST'} 
+        
+        orden_entrada = exchange.create_market_order(
+            symbol, 
+            lado_entrada, 
+            quantity=cantidad, 
+            params=params_entrada # <-- Le pasamos el parámetro aquí
+        )
         time.sleep(0.5)
         
         # 3. Orden de Trailing Stop
