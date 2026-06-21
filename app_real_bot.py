@@ -21,9 +21,9 @@ def enviar_alerta(mensaje):
 # =====================================================================
 st.set_page_config(page_title="Crypto Execution Bot (BingX)", layout="wide")
 st.title("⚡ Bot de Ejecución Automatizada Multi-Trade (BingX)")
-st.subheader("Escaneo Masivo de Volatilidad y Trailing Stop por Código (Máx 10 Trades)")
+st.subheader("Escaneo Masivo Optimizado Antibloqueo y Trailing Stop (Máx 10 Trades)")
 
-# CONFIGURACIÓN DE LA BARRA LATERAL (UMBRAL EXPANDIDO A 15%)
+# CONFIGURACIÓN DE LA BARRA LATERAL
 st.sidebar.header("⚙️ Parámetros de Trading")
 BOT_ENCENDIDO = st.sidebar.toggle("🤖 ACTIVAR BOT DE TRADING", value=False)
 TIMEFRAME = st.sidebar.selectbox("Temporalidad de Análisis", ["15m", "4h"], index=0)
@@ -71,7 +71,7 @@ st.subheader("📊 Panel de Operaciones Activas (Sincronizado con Exchange)")
 monitor_operacion = st.container()
 
 st.markdown("---")
-st.subheader("🔍 Monitoreo del Mercado en Vivo (Top de Movimiento en Vela Actual)")
+st.subheader("🔍 Monitoreo del Mercado en Vivo (Filtro Inteligente de Impulso)")
 consola_monitoreo = st.empty()
 
 st.markdown("---")
@@ -92,7 +92,7 @@ except Exception as e:
     print(f"Error cargando balance VST: {e}")
 
 if BOT_ENCENDIDO:
-    metrica_estado.success(f"🟢 BOT ENCENDIDO | Cargando catálogo completo y escaneando impulsos en tiempo real...")
+    metrica_estado.success(f"🟢 BOT ENCENDIDO | Escaneando mercados de forma optimizada y segura...")
 else:
     metrica_estado.warning("🔴 BOT APAGADO | El modo de trading automático está desactivado.")
     with monitor_operacion:
@@ -118,7 +118,7 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         
         params_leverage = {'side': direccion}
         exchange.set_leverage(int(LEVERAGE), symbol, params=params_leverage)
-        time.sleep(0.3)
+        time.sleep(0.2)
         
         lado_entrada = 'buy' if direccion == 'LONG' else 'sell'
         params_entrada = { 'marginType': 'VST', 'positionSide': direccion } 
@@ -141,7 +141,7 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         return False
 
 # =====================================================================
-# MOTOR DE ESCANEO Y SINCRONIZACIÓN CONTINUA (DINÁMICO)
+# MOTOR DE ESCANEO ULTRA-OPTIMIZADO (PROTECCIÓN DE LÍMITES)
 # =====================================================================
 if BOT_ENCENDIDO:
     try:
@@ -267,32 +267,96 @@ if BOT_ENCENDIDO:
                         st.rerun()
                     except Exception as e: pass
         else:
-            st.info("Sincronizado. Sin posiciones abiertas en BingX en este momento.")
+            st.info("Sincronizado. Sin posiciones abiertas en BingX in este momento.")
 
-    # 🔍 PASO 3: ESCANEO GENERAL DE MERCADO (MEDICIÓN PRECISA EN VELA SELECCIONADA)
+    # 🔍 PASO 3: ESCANEO HÍBRIDO DE MERCADO (RÁPIDO, EXACTO Y ANTIBLOQUEO)
     datos_consola = []
     
-    for symbol in PARES_A_REVISAR:
-        try:
-            token_curr = symbol.split('/')[0]
+    try:
+        # Descarga masiva ligera en una sola llamada de red
+        tickers = exchange.fetch_tickers(PARES_A_REVISAR)
+        
+        for symbol in PARES_A_REVISAR:
+            try:
+                token_curr = symbol.split('/')[0]
+                if symbol not in tickers: continue
+                
+                precio_actual = float(tickers[symbol]['last'])
+                # Usamos la variación diaria de los tickers SOLO como pre-filtro visual rápido
+                variacion_24h = float(tickers[symbol]['percentage']) if tickers[symbol]['percentage'] is not None else 0.0
+                volumen_24h = float(tickers[symbol]['baseVolume']) * precio_actual if tickers[symbol]['baseVolume'] is not None else 0.0
+                
+                # Agregamos los datos preliminares para mantener la tabla en vivo llena
+                datos_consola.append({
+                    "Moneda": token_curr, 
+                    "Precio Actual": f"{precio_actual} USDT",
+                    "Movimiento 24h": variacion_24h,
+                    "Variación Vela (15m)": "Calculando...", 
+                    "Volumen 24h": volumen_24h
+                })
+                
+                # Si ya tenemos la posición abierta o las ranuras llenas, saltamos
+                if token_curr in st.session_state.operaciones_activas or len(st.session_state.operaciones_activas) >= 10:
+                    continue
+                    
+                if volumen_24h < VOLUMEN_MINIMO:
+                    continue
+                
+                # 🔥 EL GANCHO INTELIGENTE: Si la moneda se mueve en el día, verificamos estrictamente su vela de 15m
+                # Esto reduce las peticiones pesadas de 250 a solo las 2 o 3 monedas más calientes
+                if abs(variacion_24h) >= (UMBRAL * 0.5): 
+                    velas = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=2)
+                    if len(velas) < 2: continue
+                    
+                    vela_actual = ... = velas[-1]
+                    precio_apertura_15m = float(vela_actual[1])
+                    precio_actual_15m = float(vela_actual[4])
+                    variacion_vela_real = ((precio_actual_15m - precio_apertura_15m) / precio_apertura_15m) * 100
+                    
+                    # Actualizamos el dato exacto de los 15 minutos en la lista visual
+                    for d in datos_consola:
+                        if d["Moneda"] == token_curr:
+                            d["Variación Vela (15m)"] = variacion_vela_real
+                    
+                    direccion_disparo = None
+                    if variacion_vela_real >= UMBRAL: 
+                        direccion_disparo = "LONG"
+                    elif variacion_vela_real <= -UMBRAL: 
+                        direccion_disparo = "SHORT"
+
+                    if direccion_disparo:
+                        if abrir_posicion_con_trailing(symbol, direccion_disparo, precio_actual_15m):
+                            st.rerun()
+            except Exception as e: 
+                continue
+                
+        if datos_consola:
+            df_consola = pd.DataFrame(datos_consola)
+            df_consola["Var_Abs"] = df_consola["Movimiento 24h"].abs()
+            df_consola = df_consola.sort_values(by="Var_Abs", ascending=False).drop(columns=["Var_Abs"])
             
-            # Descargamos los datos OHLCV reales para medir la apertura de la vela
-            velas = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=2)
-            if len(velas) < 2: continue
+            # Formateamos bonito para el Dashboard
+            df_consola["Movimiento 24h"] = df_consola["Movimiento 24h"].map(lambda x: f"{x:+.2f}%")
+            df_consola["Volumen 24h"] = df_consola["Volumen 24h"].map(lambda x: f"${x:,.0f} USD")
             
-            vela_actual = velas[-1]
-            precio_apertura = float(vela_actual[1])
-            precio_actual = float(vela_actual[4]) 
-            volumen_vela = float(vela_actual[5]) * precio_actual
-            
-            # Cálculo exacto basado en el nacimiento de la vela actual
-            variacion_vela_real = ((precio_actual - precio_apertura) / precio_apertura) * 100
-            
-            datos_consola.append({
-                "Moneda": token_curr, 
-                "Precio Actual": f"{precio_actual} USDT",
-                "Variación Vela": variacion_vela_real, 
-                "Volumen": volumen_vela
-            })
-            
-            # Restricciones multitrade
+            def limpiar_formato_vela(val):
+                if isinstance(val, float): return f"{val:+.3f}%"
+                return str(val)
+                
+            df_consola["Variación Vela (15m)"] = df_consola["Variación Vela (15m)"].apply(limpiar_formato_vela)
+            consola_monitoreo.dataframe(df_consola.head(15), use_container_width=True)
+
+    except Exception as e:
+        print(f"Error crítico en escaneo masivo: {e}")
+
+# PINTAR EL HISTORIAL DE TRADES
+if st.session_state.historial_trades:
+    df_historial = pd.DataFrame(st.session_state.historial_trades)
+    tabla_historial.dataframe(df_historial, use_container_width=True)
+else:
+    tabla_historial.info("Aún no hay operaciones cerradas en esta sesión.")
+
+# REFRESCAR CADA 5 SEGUNDOS
+if BOT_ENCENDIDO:
+    time.sleep(5)
+    st.rerun()
