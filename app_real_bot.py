@@ -33,7 +33,7 @@ LEVERAGE = st.sidebar.number_input("Apalancamiento (X)", min_value=1, max_value=
 VOLUMEN_MINIMO = st.sidebar.number_input("Volumen mínimo en vela (USDT)", value=10000, step=5000)
 TRAILING_PERC = st.sidebar.slider("Trailing Stop (%)", min_value=0.5, max_value=5.0, value=1.5, step=0.1)
 
-# CONTENEDORES VISUALES FIJOS (Para evitar parpadeos bruscos)
+# CONTENEDORES VISUALES FIJOS
 metrica_estado = st.empty()
 panel_balance = st.columns(3)
 p1 = panel_balance[0].empty()
@@ -115,7 +115,7 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         st.session_state.operaciones_activas[token] = {
             "Par": token, "Symbol_Completo": symbol, "Dirección": direccion, "Precio Entrada": precio_actual,
             "Cantidad": cantidad, "Valor Nominal": f"${MARGEN_USD * LEVERAGE} USD",
-            "Trailing Stop Activo": stop_inicial, "Precio Máximo Alcanzado": float(precio_actual)
+            "Trailing Stop Activo": stop_inicial, "Precio Máximo/Mínimo": float(precio_actual)
         }
         
         enviar_alerta(f"🛒 ¡ENTRADA POR IMPULSO DISPARADA!\n\nPar: {token}\nDirección: {direccion}\nPrecio: {precio_actual} USDT")
@@ -187,14 +187,16 @@ if BOT_ENCENDIDO:
                             dict_sincronizado[token_ex] = {
                                 "Par": token_ex, "Symbol_Completo": symbol_ex, "Dirección": direccion_ex, "Precio Entrada": precio_entrada_ex,
                                 "Cantidad": cantidad_ex, "Valor Nominal": f"${cantidad_ex * precio_entrada_ex:.1f} USD",
-                                "Trailing Stop Activo": stop_inicial, "Precio Máximo Alcanzado": float(precio_actual_ex)
+                                "Trailing Stop Activo": stop_inicial, "Precio Máximo/Mínimo": float(precio_actual_ex)
                             }
             st.session_state.operaciones_activas = dict_sincronizado
     except Exception as e:
         print(f"Error sincronización pos: {e}")
 
-    # GESTIÓN Y MONITOR DE TRAILING STOP
+    # GESTIÓN Y MONITOR DE TRAILING STOP (OPTIMIZADO DE EJECUCIÓN COLECTIVA)
     tokens_abiertos = list(st.session_state.operaciones_activas.keys())
+    necesita_rerun = False
+    
     for token in tokens_abiertos:
         try:
             op = st.session_state.operaciones_activas.get(token)
@@ -206,13 +208,13 @@ if BOT_ENCENDIDO:
             
             direccion = op.get("Dirección")
             stop_actual = op.get("Trailing Stop Activo")
-            max_precio = op.get("Precio Máximo Alcanzado")
+            extremo_precio = op.get("Precio Máximo/Mínimo")
             precio_entrada = op.get("Precio Entrada")
             cant = op.get("Cantidad")
             
             if direccion == "LONG":
-                if precio_vivo > max_precio:
-                    st.session_state.operaciones_activas[token]["Precio Máximo Alcanzado"] = precio_vivo
+                if precio_vivo > extremo_precio:
+                    st.session_state.operaciones_activas[token]["Precio Máximo/Mínimo"] = precio_vivo
                     nuevo_stop_sucio = precio_vivo * (1 - (TRAILING_PERC / 100))
                     nuevo_stop = float(exchange.price_to_precision(symbol_activo, nuevo_stop_sucio))
                     if nuevo_stop > stop_actual:
@@ -226,12 +228,13 @@ if BOT_ENCENDIDO:
                         "Fecha/Hora": time.strftime("%Y-%m-%d %H:%M:%S"), "Par": token, "Dirección": direccion,
                         "Precio Entrada": precio_entrada, "Precio Cierre": precio_vivo, "PnL Estimado": f"{pnl:+.4f} VST"
                     })
-                    enviar_alerta(f"🏁 Trailing Stop ejecutado en {token}. Resultado: {pnl:+.2f} VST")
-                    st.rerun()
+                    enviar_alerta(f"🏁 Trailing Stop ejecutado en LONG para {token}. Resultado: {pnl:+.2f} VST")
+                    necesita_rerun = True
                     
             elif direccion == "SHORT":
-                if precio_vivo < max_precio:
-                    st.session_state.operaciones_activas[token]["Precio Máximo Alcanzado"] = precio_vivo
+                # DETECCIÓN CORREGIDA: En SHORT buscamos que el precio baje (Nuevo Mínimo)
+                if precio_vivo < extremo_precio:
+                    st.session_state.operaciones_activas[token]["Precio Máximo/Mínimo"] = precio_vivo
                     nuevo_stop_sucio = precio_vivo * (1 + (TRAILING_PERC / 100))
                     nuevo_stop = float(exchange.price_to_precision(symbol_activo, nuevo_stop_sucio))
                     if nuevo_stop < stop_actual:
@@ -245,21 +248,24 @@ if BOT_ENCENDIDO:
                         "Fecha/Hora": time.strftime("%Y-%m-%d %H:%M:%S"), "Par": token, "Dirección": direccion,
                         "Precio Entrada": precio_entrada, "Precio Cierre": precio_vivo, "PnL Estimado": f"{pnl:+.4f} VST"
                     })
-                    enviar_alerta(f"🏁 Trailing Stop ejecutado en {token}. Resultado: {pnl:+.2f} VST")
-                    st.rerun()
+                    enviar_alerta(f"🏁 Trailing Stop ejecutado en SHORT para {token}. Resultado: {pnl:+.2f} VST")
+                    necesita_rerun = True
         except Exception as e:
             print(f"Error trailing: {e}")
+
+    if necesita_rerun:
+        st.rerun()
 
     # PANEL INTERACTIVO DE OPERACIONES ACTIVAS
     if st.session_state.operaciones_activas:
         df_op = pd.DataFrame(st.session_state.operaciones_activas.values())
         df_op["Cerrar Trade"] = False
-        columnas_orden = ["Par", "Dirección", "Precio Entrada", "Cantidad", "Valor Nominal", "Trailing Stop Activo", "Precio Máximo Alcanzado", "Cerrar Trade"]
+        columnas_orden = ["Par", "Dirección", "Precio Entrada", "Cantidad", "Valor Nominal", "Trailing Stop Activo", "Precio Máximo/Mínimo", "Cerrar Trade"]
         
         evento_cierre = monitor_operacion.data_editor(
             df_op[columnas_orden],
             column_config={"Cerrar Trade": st.column_config.CheckboxColumn("Cerrar de Emergencia", default=False)},
-            disabled=["Par", "Dirección", "Precio Entrada", "Cantidad", "Valor Nominal", "Trailing Stop Activo", "Precio Máximo Alcanzado"],
+            disabled=["Par", "Dirección", "Precio Entrada", "Cantidad", "Valor Nominal", "Trailing Stop Activo", "Precio Máximo/Mínimo"],
             width='stretch', key="editor_posiciones"
         )
         
@@ -303,6 +309,7 @@ if BOT_ENCENDIDO:
                 variacion_24h = float(tickers[symbol]['percentage']) if tickers[symbol]['percentage'] is not None else 0.0
                 volumen_24h = float(tickers[symbol]['baseVolume']) * precio_actual if tickers[symbol]['baseVolume'] is not None else 0.0
                 
+                # OPTIMIZACIÓN DE VELOCIDAD: Control estricto de pausas para evitar Rate Limits silenciosos
                 velas = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=2)
                 if len(velas) < 2: continue
                 
