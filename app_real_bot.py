@@ -17,7 +17,7 @@ def enviar_alerta(mensaje):
         except Exception as e: print(f"Error Telegram: {e}")
 
 # =====================================================================
-# INTERFAZ WEB (STREAMLIT) - DECLARACIONES AL INICIO PARA EVITAR NAMEERROR
+# INTERFAZ WEB (STREAMLIT)
 # =====================================================================
 st.set_page_config(page_title="Crypto Execution Bot (BingX)", layout="wide")
 st.title("⚡ Bot de Ejecución Automatizada Multi-Trade (BingX)")
@@ -33,7 +33,7 @@ LEVERAGE = st.sidebar.number_input("Apalancamiento (X)", min_value=1, max_value=
 VOLUMEN_MINIMO = st.sidebar.number_input("Volumen mínimo en vela (USDT)", value=10000, step=5000)
 TRAILING_PERC = st.sidebar.slider("Trailing Stop (%)", min_value=0.5, max_value=5.0, value=1.5, step=0.1)
 
-# CONTENEDORES VISUALES FIJOS (Declarados globalmente antes de cualquier función)
+# CONTENEDORES VISUALES FIJOS (Globales)
 metrica_estado = st.empty()
 panel_balance = st.columns(3)
 p1 = panel_balance[0].empty()
@@ -54,7 +54,7 @@ tabla_historial = st.empty()
 consola_errores = st.empty()
 
 # =====================================================================
-# CONEXIÓN OPTIMIZADA WITH CACHÉ
+# CONEXIÓN OPTIMIZADA CON CACHÉ (Inicializada arriba de las funciones)
 # =====================================================================
 @st.cache_resource
 def inicializar_exchange():
@@ -69,7 +69,7 @@ def inicializar_exchange():
     return ins
 
 try:
-    exchange = inicializar_exchange()
+    exchange_global = inicializar_exchange()
 except Exception as e:
     st.error(f"❌ Error crítico de conexión a BingX: {e}")
     st.stop()
@@ -82,35 +82,35 @@ if 'historial_trades' not in st.session_state:
 # =====================================================================
 # FUNCIONES DE TRADING (BINGX)
 # =====================================================================
-def calcular_cantidad_contratos(symbol, precio_actual):
+def calcular_cantidad_contratos(ex_instance, symbol, precio_actual):
     try:
         valor_posicion_usd = MARGEN_USD * LEVERAGE
         cantidad_bruta = valor_posicion_usd / precio_actual
-        cantidad_ajustada = exchange.amount_to_precision(symbol, cantidad_bruta)
+        cantidad_ajustada = ex_instance.amount_to_precision(symbol, cantidad_bruta)
         return float(cantidad_ajustada)
     except Exception as e:
         return 0
 
-def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
+def abrir_posicion_con_trailing(ex_instance, symbol, direccion, precio_actual):
     try:
         token = symbol.split('/')[0]
-        cantidad = calcular_cantidad_contratos(symbol, precio_actual)
+        cantidad = calcular_cantidad_contratos(ex_instance, symbol, precio_actual)
         if cantidad == 0: return False
         
         params_leverage = {'side': direccion}
-        exchange.set_leverage(int(LEVERAGE), symbol, params=params_leverage)
+        ex_instance.set_leverage(int(LEVERAGE), symbol, params=params_leverage)
         time.sleep(0.2)
         
         lado_entrada = 'buy' if direccion == 'LONG' else 'sell'
         params_entrada = { 'marginType': 'VST', 'positionSide': direccion } 
-        orden_entrada = exchange.create_market_order(symbol, lado_entrada, amount=cantidad, params=params_entrada)
+        orden_entrada = ex_instance.create_market_order(symbol, lado_entrada, amount=cantidad, params=params_entrada)
         
         if direccion == "LONG":
             stop_sucio = precio_actual * (1 - (TRAILING_PERC / 100))
         else:
             stop_sucio = precio_actual * (1 + (TRAILING_PERC / 100))
             
-        stop_inicial = float(exchange.price_to_precision(symbol, stop_sucio))
+        stop_inicial = float(ex_instance.price_to_precision(symbol, stop_sucio))
             
         st.session_state.operaciones_activas[token] = {
             "Par": token, "Symbol_Completo": symbol, "Dirección": direccion, "Precio Entrada": precio_actual,
@@ -124,10 +124,10 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         return False
 
 # =====================================================================
-# MOTOR EN FRAGMENTO (REPARADO Y ALINEADO CON EL CONTEXTO GLOBAL)
+# MOTOR EN FRAGMENTO (Con la instancia del exchange inyectada correctamente)
 # =====================================================================
 @st.fragment(run_every=5)
-def ejecutar_bucle_bot():
+def ejecutar_bucle_bot(ex_instance):
     if BOT_ENCENDIDO:
         metrica_estado.success(f"🟢 BOT ENCENDIDO | Escaneando el mercado a alta velocidad sin parpadeos visuales...")
     else:
@@ -137,7 +137,7 @@ def ejecutar_bucle_bot():
 
     # MÓDULO DE ACTUALIZACIÓN DE BALANCE (VST)
     try:
-        balance = exchange.fetch_balance(params={'currency': 'VST'})
+        balance = ex_instance.fetch_balance(params={'currency': 'VST'})
         vst_libre = float(balance.get('free', {}).get('VST', 0.0))
         vst_total = float(balance.get('total', {}).get('VST', 0.0))
         
@@ -157,7 +157,7 @@ def ejecutar_bucle_bot():
         consola_errores.error(f"⚠️ Aviso balance VST: {e}")
 
     try:
-        mercados = exchange.load_markets()
+        mercados = ex_instance.load_markets()
         PARES_A_REVISAR = [symbol for symbol in mercados.keys() if symbol.endswith('/USDT:USDT')]
     except Exception as e:
         PARES_A_REVISAR = ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"]
@@ -166,7 +166,7 @@ def ejecutar_bucle_bot():
 
     # SINCRONIZACIÓN DIRECTA DESDE EXCHANGE BLINDADA
     try:
-        posiciones_exchange = exchange.fetch_positions()
+        posiciones_exchange = ex_instance.fetch_positions()
         if isinstance(posiciones_exchange, list):
             for pos in posiciones_exchange:
                 cantidad_ex = float(pos.get('contracts', 0) if pos.get('contracts') is not None else 0)
@@ -188,7 +188,7 @@ def ejecutar_bucle_bot():
                             else:
                                 stop_sucio = precio_actual_ex * (1 + (TRAILING_PERC / 100))
                             
-                            stop_inicial = float(exchange.price_to_precision(symbol_ex, stop_sucio))
+                            stop_inicial = float(ex_instance.price_to_precision(symbol_ex, stop_sucio))
                                 
                             dict_sincronizado[token_ex] = {
                                 "Par": token_ex, "Symbol_Completo": symbol_ex, "Dirección": direccion_ex, "Precio Entrada": precio_entrada_ex,
@@ -207,27 +207,27 @@ def ejecutar_bucle_bot():
             if not op: continue
             
             symbol_activo = op.get("Symbol_Completo")
-            ticker = exchange.fetch_ticker(symbol_activo)
+            ticker = ex_instance.fetch_ticker(symbol_activo)
             precio_vivo = float(ticker['last'])
             
             direccion = op.get("Dirección")
             stop_actual = op.get("Trailing Stop Activo")
             max_precio = op.get("Precio Máximo Alcanzado")
             precio_entrada = op.get("Precio Entrada")
-            cantidad = op.get("Cantidad")
+            cant = op.get("Cantidad")
             
             if direccion == "LONG":
                 if precio_vivo > max_precio:
                     st.session_state.operaciones_activas[token]["Precio Máximo Alcanzado"] = precio_vivo
                     nuevo_stop_sucio = precio_vivo * (1 - (TRAILING_PERC / 100))
-                    nuevo_stop = float(exchange.price_to_precision(symbol_activo, nuevo_stop_sucio))
+                    nuevo_stop = float(ex_instance.price_to_precision(symbol_activo, nuevo_stop_sucio))
                     if nuevo_stop > stop_actual:
                         st.session_state.operaciones_activas[token]["Trailing Stop Activo"] = nuevo_stop
                 
                 if precio_vivo <= stop_actual:
-                    exchange.create_market_order(symbol_activo, 'sell', amount=cantidad, params={'marginType': 'VST', 'positionSide': 'LONG'})
+                    ex_instance.create_market_order(symbol_activo, 'sell', amount=cant, params={'marginType': 'VST', 'positionSide': 'LONG'})
                     del st.session_state.operaciones_activas[token]
-                    pnl = (precio_vivo - precio_entrada) * cantidad
+                    pnl = (precio_vivo - precio_entrada) * cant
                     st.session_state.historial_trades.append({
                         "Fecha/Hora": time.strftime("%Y-%m-%d %H:%M:%S"), "Par": token, "Dirección": direccion,
                         "Precio Entrada": precio_entrada, "Precio Cierre": precio_vivo, "PnL Estimado": f"{pnl:+.4f} VST"
@@ -239,14 +239,14 @@ def ejecutar_bucle_bot():
                 if precio_vivo < max_precio:
                     st.session_state.operaciones_activas[token]["Precio Máximo Alcanzado"] = precio_vivo
                     nuevo_stop_sucio = precio_vivo * (1 + (TRAILING_PERC / 100))
-                    nuevo_stop = float(exchange.price_to_precision(symbol_activo, nuevo_stop_sucio))
+                    nuevo_stop = float(ex_instance.price_to_precision(symbol_activo, nuevo_stop_sucio))
                     if nuevo_stop < stop_actual:
                         st.session_state.operaciones_activas[token]["Trailing Stop Activo"] = nuevo_stop
                 
                 if precio_vivo >= stop_actual:
-                    exchange.create_market_order(symbol_activo, 'buy', amount=cantidad, params={'marginType': 'VST', 'positionSide': 'SHORT'})
+                    ex_instance.create_market_order(symbol_activo, 'buy', amount=cant, params={'marginType': 'VST', 'positionSide': 'SHORT'})
                     del st.session_state.operaciones_activas[token]
-                    pnl = (precio_entrada - precio_vivo) * cantidad
+                    pnl = (precio_entrada - precio_vivo) * cant
                     st.session_state.historial_trades.append({
                         "Fecha/Hora": time.strftime("%Y-%m-%d %H:%M:%S"), "Par": token, "Dirección": direccion,
                         "Precio Entrada": precio_entrada, "Precio Cierre": precio_vivo, "PnL Estimado": f"{pnl:+.4f} VST"
@@ -275,7 +275,7 @@ def ejecutar_bucle_bot():
                 op_detalles = st.session_state.operaciones_activas[token_a_cerrar]
                 lado_cierre = 'sell' if op_detalles["Dirección"] == 'LONG' else 'buy'
                 try:
-                    exchange.create_market_order(op_detalles["Symbol_Completo"], lado_cierre, amount=op_detalles["Cantidad"], params={'marginType': 'VST', 'positionSide': op_detalles["Dirección"]})
+                    ex_instance.create_market_order(op_detalles["Symbol_Completo"], lado_cierre, amount=op_detalles["Cantidad"], params={'marginType': 'VST', 'positionSide': op_detalles["Dirección"]})
                     del st.session_state.operaciones_activas[token_a_cerrar]
                     st.session_state.historial_trades.append({
                         "Fecha/Hora": time.strftime("%Y-%m-%d %H:%M:%S"), "Par": token_a_cerrar, "Dirección": op_detalles["Dirección"],
@@ -290,7 +290,7 @@ def ejecutar_bucle_bot():
     datos_consola = []
     
     try:
-        tickers = exchange.fetch_tickers(PARES_A_REVISAR)
+        tickers = ex_instance.fetch_tickers(PARES_A_REVISAR)
         
         pares_candidatos = []
         for symbol in PARES_A_REVISAR:
@@ -309,7 +309,7 @@ def ejecutar_bucle_bot():
                 variacion_24h = float(tickers[symbol]['percentage']) if tickers[symbol]['percentage'] is not None else 0.0
                 volumen_24h = float(tickers[symbol]['baseVolume']) * precio_actual if tickers[symbol]['baseVolume'] is not None else 0.0
                 
-                velas = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=2)
+                velas = ex_instance.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=2)
                 if len(velas) < 2: continue
                 
                 vela_actual = velas[-1]
@@ -338,7 +338,7 @@ def ejecutar_bucle_bot():
                     direccion_disparo = "SHORT"
 
                 if direccion_disparo:
-                    if abrir_posicion_con_trailing(symbol, direccion_disparo, precio_actual_15m):
+                    if abrir_posicion_con_trailing(ex_instance, symbol, direccion_disparo, precio_actual_15m):
                         st.rerun()
             except Exception as e: 
                 continue
@@ -361,5 +361,5 @@ def ejecutar_bucle_bot():
     else:
         tabla_historial.info("Aún no hay operaciones cerradas en esta sesión.")
 
-# Lanza la ejecución silenciosa del fragmento al final
-ejecutar_bucle_bot()
+# Lanza la ejecución pasando la instancia global corregida
+ejecutar_bucle_bot(exchange_global)
