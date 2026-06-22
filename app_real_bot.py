@@ -163,7 +163,8 @@ if BOT_ENCENDIDO:
         posiciones_exchange = exchange.fetch_positions()
         if isinstance(posiciones_exchange, list):
             for pos in posiciones_exchange:
-                cantidad_ex = float(pos.get('contracts', 0) if pos.get('contracts') is not None else 0)
+                amount_pos = pos.get('contracts')
+                cantidad_ex = float(amount_pos if amount_pos is not None else 0)
                 if cantidad_ex > 0:
                     symbol_ex = pos.get('symbol')
                     if not symbol_ex: continue
@@ -193,7 +194,7 @@ if BOT_ENCENDIDO:
     except Exception as e:
         print(f"Error sincronización pos: {e}")
 
-    # GESTIÓN Y MONITOR DE TRAILING STOP (OPTIMIZADO DE EJECUCIÓN COLECTIVA)
+    # GESTIÓN Y MONITOR DE TRAILING STOP
     tokens_abiertos = list(st.session_state.operaciones_activas.keys())
     necesita_rerun = False
     
@@ -232,7 +233,6 @@ if BOT_ENCENDIDO:
                     necesita_rerun = True
                     
             elif direccion == "SHORT":
-                # DETECCIÓN CORREGIDA: En SHORT buscamos que el precio baje (Nuevo Mínimo)
                 if precio_vivo < extremo_precio:
                     st.session_state.operaciones_activas[token]["Precio Máximo/Mínimo"] = precio_vivo
                     nuevo_stop_sucio = precio_vivo * (1 + (TRAILING_PERC / 100))
@@ -260,6 +260,7 @@ if BOT_ENCENDIDO:
     if st.session_state.operaciones_activas:
         df_op = pd.DataFrame(st.session_state.operaciones_activas.values())
         df_op["Cerrar Trade"] = False
+        # COLUMNA SINCRONIZADA VISUALMENTE AQUÍ: "Precio Máximo/Mínimo"
         columnas_orden = ["Par", "Dirección", "Precio Entrada", "Cantidad", "Valor Nominal", "Trailing Stop Activo", "Precio Máximo/Mínimo", "Cerrar Trade"]
         
         evento_cierre = monitor_operacion.data_editor(
@@ -296,7 +297,8 @@ if BOT_ENCENDIDO:
         for symbol in PARES_A_REVISAR:
             if symbol in tickers:
                 precio_actual = float(tickers[symbol]['last'])
-                variacion_24h = float(tickers[symbol]['percentage']) if tickers[symbol]['percentage'] is not None else 0.0
+                var_24h = tickers[symbol]['percentage']
+                variacion_24h = float(var_24h if var_24h is not None else 0.0)
                 pares_candidatos.append((symbol, abs(variacion_24h)))
         
         pares_candidatos = sorted(pares_candidatos, key=lambda x: x[1], reverse=True)[:15]
@@ -306,10 +308,11 @@ if BOT_ENCENDIDO:
             try:
                 token_curr = symbol.split('/')[0]
                 precio_actual = float(tickers[symbol]['last'])
-                variacion_24h = float(tickers[symbol]['percentage']) if tickers[symbol]['percentage'] is not None else 0.0
-                volumen_24h = float(tickers[symbol]['baseVolume']) * precio_actual if tickers[symbol]['baseVolume'] is not None else 0.0
+                var_24h = tickers[symbol]['percentage']
+                variacion_24h = float(var_24h if var_24h is not None else 0.0)
+                v_base = tickers[symbol]['baseVolume']
+                volumen_24h = float(v_base * precio_actual if v_base is not None else 0.0)
                 
-                # OPTIMIZACIÓN DE VELOCIDAD: Control estricto de pausas para evitar Rate Limits silenciosos
                 velas = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=2)
                 if len(velas) < 2: continue
                 
@@ -362,7 +365,7 @@ if BOT_ENCENDIDO:
     else:
         tabla_historial.info("Aún no hay operaciones cerradas en esta sesión.")
 
-    # REFRESCAR CADA 5 SEGUNDOS (Control clásico)
+    # REFRESCAR CADA 5 SEGUNDOS
     time.sleep(5)
     st.rerun()
 else:
