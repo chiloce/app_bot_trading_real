@@ -17,7 +17,7 @@ def enviar_alerta(mensaje):
         except Exception as e: print(f"Error Telegram: {e}")
 
 # =====================================================================
-# INTERFAZ WEB (STREAMLIT)
+# INTERFAZ WEB (STREAMLIT) - DECLARACIONES AL INICIO PARA EVITAR NAMEERROR
 # =====================================================================
 st.set_page_config(page_title="Crypto Execution Bot (BingX)", layout="wide")
 st.title("⚡ Bot de Ejecución Automatizada Multi-Trade (BingX)")
@@ -32,6 +32,26 @@ MARGEN_USD = st.sidebar.number_input("Margen de Entrada (USD)", min_value=1.0, v
 LEVERAGE = st.sidebar.number_input("Apalancamiento (X)", min_value=1, max_value=25, value=10, step=1)
 VOLUMEN_MINIMO = st.sidebar.number_input("Volumen mínimo en vela (USDT)", value=10000, step=5000)
 TRAILING_PERC = st.sidebar.slider("Trailing Stop (%)", min_value=0.5, max_value=5.0, value=1.5, step=0.1)
+
+# CONTENEDORES VISUALES FIJOS (Declarados globalmente antes de cualquier función)
+metrica_estado = st.empty()
+panel_balance = st.columns(3)
+p1 = panel_balance[0].empty()
+p2 = panel_balance[1].empty()
+p3 = panel_balance[2].empty()
+
+st.markdown("---")
+st.subheader("📊 Panel de Operaciones Activas (Sincronizado con Exchange)")
+monitor_operacion = st.empty()
+
+st.markdown("---")
+st.subheader("🔍 Monitoreo del Mercado en Vivo (Filtro Inteligente de Impulso)")
+consola_monitoreo = st.empty()
+
+st.markdown("---")
+st.subheader("📜 Historial de Operaciones Cerradas")
+tabla_historial = st.empty()
+consola_errores = st.empty()
 
 # =====================================================================
 # CONEXIÓN OPTIMIZADA WITH CACHÉ
@@ -58,26 +78,6 @@ if 'operaciones_activas' not in st.session_state:
     st.session_state.operaciones_activas = {}
 if 'historial_trades' not in st.session_state:
     st.session_state.historial_trades = []
-
-# Contenedores visuales fijos principales
-metrica_estado = st.empty()
-panel_balance = st.columns(3)
-p1 = panel_balance[0].empty()
-p2 = panel_balance[1].empty()
-p3 = panel_balance[2].empty()
-
-st.markdown("---")
-st.subheader("📊 Panel de Operaciones Activas (Sincronizado con Exchange)")
-monitor_operacion = st.empty()
-
-st.markdown("---")
-st.subheader("🔍 Monitoreo del Mercado en Vivo (Filtro Inteligente de Impulso)")
-consola_monitoreo = st.empty()
-
-st.markdown("---")
-st.subheader("📜 Historial de Operaciones Cerradas")
-tabla_historial = st.empty()
-consola_errores = st.empty()
 
 # =====================================================================
 # FUNCIONES DE TRADING (BINGX)
@@ -124,11 +124,10 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         return False
 
 # =====================================================================
-# MOTOR EN FRAGMENTO (ELIMINA EL PARPADEO VISUAL COMPLETAMENTE)
+# MOTOR EN FRAGMENTO (REPARADO Y ALINEADO CON EL CONTEXTO GLOBAL)
 # =====================================================================
 @st.fragment(run_every=5)
 def ejecutar_bucle_bot():
-    # Pintar Estado del Bot fijo sin recarga total
     if BOT_ENCENDIDO:
         metrica_estado.success(f"🟢 BOT ENCENDIDO | Escaneando el mercado a alta velocidad sin parpadeos visuales...")
     else:
@@ -287,7 +286,7 @@ def ejecutar_bucle_bot():
     else:
         monitor_operacion.info("Sincronizado. Sin posiciones abiertas en BingX en este momento.")
 
-    # 🔍 PASO 3: ESCANEO HÍBRIDO DE MERCADO (ALTA VELOCIDAD Y ACTUALIZACIÓN EN VIVO)
+    # 🔍 PASO 3: ESCANEO HÍBRIDO DE MERCADO
     datos_consola = []
     
     try:
@@ -362,5 +361,5 @@ def ejecutar_bucle_bot():
     else:
         tabla_historial.info("Aún no hay operaciones cerradas en esta sesión.")
 
-# Lanza la ejecución silenciosa del fragmento
+# Lanza la ejecución silenciosa del fragmento al final
 ejecutar_bucle_bot()
