@@ -110,7 +110,7 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         else:
             stop_sucio = precio_actual * (1 + (TRAILING_PERC / 100))
             
-        # Corregido a price_to_string para CCXT moderno
+        # CORREGIDO: price_to_string para evitar errores de versión en CCXT
         stop_inicial = float(exchange.price_to_string(symbol, stop_sucio))
             
         st.session_state.operaciones_activas[token] = {
@@ -128,25 +128,22 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
 # BUCLE PRINCIPAL DE EJECUCIÓN (LÓGICA LINEAL SEGURA)
 # =====================================================================
 if BOT_ENCENDIDO:
-    metrica_estado.success(f"🟢 BOT ENCENDIDO | Escaneando el mercado de forma segura...")
+    metrica_estado.success(f"🟢 BOT ENCENDIDO | Escaneando el mercado de forma segura y optimizada...")
     
-    # MÓDULO DE ACTUALIZACIÓN DE BALANCE (VST) - PROTEGIDO CON CONTRA TIPOS
-    vst_libre = 0.0
-    vst_total = 0.0
+    # MÓDULO DE ACTUALIZACIÓN DE BALANCE (VST)
     try:
         balance = exchange.fetch_balance(params={'currency': 'VST'})
-        if isinstance(balance, dict):
-            vst_libre = float(balance.get('free', {}).get('VST', 0.0))
-            vst_total = float(balance.get('total', {}).get('VST', 0.0))
-            
-            if vst_total == 0.0 and 'info' in balance and isinstance(balance['info'], dict) and 'data' in balance['info']:
-                data_bal = balance['info']['data']
-                if isinstance(data_bal, dict) and 'balance' in data_bal and isinstance(data_bal['balance'], dict):
-                    vst_libre = float(data_bal['balance'].get('availableMargin', 0.0))
-                    vst_total = float(data_bal['balance'].get('equity', 0.0))
-                elif isinstance(data_bal, list) and len(data_bal) > 0 and isinstance(data_bal[0], dict):
-                    vst_libre = float(data_bal[0].get('availableMargin', 0.0))
-                    vst_total = float(data_bal[0].get('equity', 0.0))
+        vst_libre = float(balance.get('free', {}).get('VST', 0.0))
+        vst_total = float(balance.get('total', {}).get('VST', 0.0))
+        
+        if vst_total == 0.0 and 'info' in balance and 'data' in balance['info']:
+            data_bal = balance['info']['data']
+            if isinstance(data_bal, dict) and 'balance' in data_bal:
+                vst_libre = float(data_bal['balance'].get('availableMargin', 0.0))
+                vst_total = float(data_bal['balance'].get('equity', 0.0))
+            elif isinstance(data_bal, list) and len(data_bal) > 0:
+                vst_libre = float(data_bal[0].get('availableMargin', 0.0))
+                vst_total = float(data_bal[0].get('equity', 0.0))
 
         p1.metric(label="💰 Capital Total (VST)", value=f"{vst_total:,.2f} VST")
         p2.metric(label="🔓 Margen Disponible", value=f"{vst_libre:,.2f} VST")
@@ -162,14 +159,12 @@ if BOT_ENCENDIDO:
 
     dict_sincronizado = {}
 
-    # SINCRONIZACIÓN DIRECTA DESDE EXCHANGE BLINDADA (PROTECCIÓN COMPLETA CONTRA LISTAS ERRÓNEAS)
+    # SINCRONIZACIÓN DIRECTA DESDE EXCHANGE BLINDADA
     try:
         posiciones_exchange = exchange.fetch_positions()
         if isinstance(posiciones_exchange, list):
             for pos in posiciones_exchange:
-                # Verificación estricta: asegurar que cada posición sea un diccionario válido
                 if not isinstance(pos, dict): continue
-                
                 amount_pos = pos.get('contracts')
                 cantidad_ex = float(amount_pos if amount_pos is not None else 0)
                 if cantidad_ex > 0:
@@ -178,7 +173,7 @@ if BOT_ENCENDIDO:
                     token_ex = symbol_ex.split('/')[0]
                     
                     if symbol_ex in PARES_A_REVISAR:
-                        direccion_ex = str(pos.get('side', '')).upper()
+                        direccion_ex = pos.get('side', '').upper()
                         precio_entrada_ex = float(pos.get('entryPrice', 0))
                         precio_actual_ex = float(pos.get('markPrice', precio_entrada_ex))
                         
@@ -190,7 +185,7 @@ if BOT_ENCENDIDO:
                             else:
                                 stop_sucio = precio_entrada_ex * (1 + (TRAILING_PERC / 100))
                             
-                            # Corregido a price_to_string
+                            # CORREGIDO: price_to_string
                             stop_inicial = float(exchange.price_to_string(symbol_ex, stop_sucio))
                                 
                             dict_sincronizado[token_ex] = {
@@ -225,7 +220,7 @@ if BOT_ENCENDIDO:
                 if precio_vivo > extremo_precio:
                     st.session_state.operaciones_activas[token]["Precio Extremo"] = precio_vivo
                     nuevo_stop_sucio = precio_vivo * (1 - (TRAILING_PERC / 100))
-                    # Corregido a price_to_string
+                    # CORREGIDO: price_to_string
                     nuevo_stop = float(exchange.price_to_string(symbol_activo, nuevo_stop_sucio))
                     if nuevo_stop > stop_actual:
                         st.session_state.operaciones_activas[token]["Trailing Stop Activo"] = nuevo_stop
@@ -245,7 +240,7 @@ if BOT_ENCENDIDO:
                 if precio_vivo < extremo_precio:
                     st.session_state.operaciones_activas[token]["Precio Extremo"] = precio_vivo
                     nuevo_stop_sucio = precio_vivo * (1 + (TRAILING_PERC / 100))
-                    # Corregido a price_to_string
+                    # CORREGIDO: price_to_string
                     nuevo_stop = float(exchange.price_to_string(symbol_activo, nuevo_stop_sucio))
                     if nuevo_stop < stop_actual:
                         st.session_state.operaciones_activas[token]["Trailing Stop Activo"] = nuevo_stop
@@ -307,7 +302,7 @@ if BOT_ENCENDIDO:
         
         pares_candidatos = []
         for symbol in PARES_A_REVISAR:
-            if symbol in tickers and isinstance(tickers[symbol], dict):
+            if symbol in tickers:
                 precio_actual = float(tickers[symbol]['last'])
                 var_24h = tickers[symbol]['percentage']
                 variacion_24h = float(var_24h if var_24h is not None else 0.0)
