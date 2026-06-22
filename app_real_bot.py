@@ -97,19 +97,39 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         cantidad = calcular_cantidad_contratos(symbol, precio_actual)
         if cantidad == 0: return False
         
-        params_leverage = {'side': direccion}
-        exchange.set_leverage(int(LEVERAGE), symbol, params=params_leverage)
-        time.sleep(0.2)
+        # Redondeo estricto de contratos para evitar fallos de precisión en la Testnet
+        if cantidad >= 1:
+            cantidad = float(int(cantidad))
+        else:
+            cantidad = float(exchange.amount_to_precision(symbol, cantidad))
+            
+        if cantidad <= 0: return False
+
+        # Configuración previa del apalancamiento
+        try:
+            exchange.set_leverage(int(LEVERAGE), symbol, params={'side': direccion})
+            time.sleep(0.1)
+        except Exception:
+            pass
         
-        lado_entrada = 'buy' if direccion == 'LONG' else 'sell'
-        params_entrada = { 'marginType': 'VST', 'positionSide': direccion } 
-        orden_entrada = exchange.create_market_order(symbol, lado_entrada, amount=cantidad, params=params_entrada)
-        
-        if direccion == "LONG":
+        # Mapeo de parámetros nativos corregidos para BingX
+        if direccion == 'LONG':
+            lado_ccxt = 'buy'
+            lado_native = 'BUY'
             stop_sucio = precio_actual * (1 - (TRAILING_PERC / 100))
         else:
+            lado_ccxt = 'sell'
+            lado_native = 'SELL'
             stop_sucio = precio_actual * (1 + (TRAILING_PERC / 100))
             
+        params_entrada = {
+            'side': lado_native
+        }
+        
+        # Ejecución de la orden de mercado
+        orden_entrada = exchange.create_market_order(symbol, lado_ccxt, amount=cantidad, params=params_entrada)
+        
+        # Guardar en memoria interna usando price_to_string
         stop_inicial = float(exchange.price_to_string(symbol, stop_sucio))
             
         st.session_state.operaciones_activas[token] = {
@@ -121,6 +141,7 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         enviar_alerta(f"🛒 ¡ENTRADA POR IMPULSO DISPARADA!\n\nPar: {token}\nDirección: {direccion}\nPrecio: {precio_actual} USDT")
         return True
     except Exception as e:
+        consola_errores.error(f"❌ Error al intentar abrir {token}: {e}")
         return False
 
 # =====================================================================
@@ -129,20 +150,23 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
 if BOT_ENCENDIDO:
     metrica_estado.success(f"🟢 BOT ENCENDIDO | Escaneando el mercado de forma segura...")
     
-    # MÓDULO DE ACTUALIZACIÓN DE BALANCE (VST)
+    # MÓDULO DE ACTUALIZACIÓN DE BALANCE (VST) - PROTEGIDO CONTRA ERRORES DE TIPO
+    vst_libre = 0.0
+    vst_total = 0.0
     try:
         balance = exchange.fetch_balance(params={'currency': 'VST'})
-        vst_libre = float(balance.get('free', {}).get('VST', 0.0))
-        vst_total = float(balance.get('total', {}).get('VST', 0.0))
-        
-        if vst_total == 0.0 and 'info' in balance and 'data' in balance['info']:
-            data_bal = balance['info']['data']
-            if isinstance(data_bal, dict) and 'balance' in data_bal:
-                vst_libre = float(data_bal['balance'].get('availableMargin', 0.0))
-                vst_total = float(data_bal['balance'].get('equity', 0.0))
-            elif isinstance(data_bal, list) and len(data_bal) > 0:
-                vst_libre = float(data_bal[0].get('availableMargin', 0.0))
-                vst_total = float(data_bal[0].get('equity', 0.0))
+        if isinstance(balance, dict):
+            vst_libre = float(balance.get('free', {}).get('VST', 0.0))
+            vst_total = float(balance.get('total', {}).get('VST', 0.0))
+            
+            if vst_total == 0.0 and 'info' in balance and isinstance(balance['info'], dict) and 'data' in balance['info']:
+                data_bal = balance['info']['data']
+                if isinstance(data_bal, dict) and 'balance' in data_bal and isinstance(data_bal['balance'], dict):
+                    vst_libre = float(data_bal['balance'].get('availableMargin', 0.0))
+                    vst_total = float(data_bal['balance'].get('equity', 0.0))
+                elif isinstance(data_bal, list) and len(data_bal) > 0 and isinstance(data_bal[0], dict):
+                    vst_libre = float(data_bal[0].get('availableMargin', 0.0))
+                    vst_total = float(data_bal[0].get('equity', 0.0))
 
         p1.metric(label="💰 Capital Total (VST)", value=f"{vst_total:,.2f} VST")
         p2.metric(label="🔓 Margen Disponible", value=f"{vst_libre:,.2f} VST")
@@ -158,7 +182,7 @@ if BOT_ENCENDIDO:
 
     dict_sincronizado = {}
 
-    # SINCRONIZACIÓN DIRECTA DESDE EXCHANGE BLINDADA
+    # SINCRONIZACIÓN DIRECTA DESDE EXCHANGE BLINDADA CONTRA LISTAS
     try:
         posiciones_exchange = exchange.fetch_positions()
         if isinstance(posiciones_exchange, list):
@@ -172,7 +196,7 @@ if BOT_ENCENDIDO:
                     token_ex = symbol_ex.split('/')[0]
                     
                     if symbol_ex in PARES_A_REVISAR:
-                        direccion_ex = pos.get('side', '').upper()
+                        direccion_ex = str(pos.get('side', '')).upper()
                         precio_entrada_ex = float(pos.get('entryPrice', 0))
                         precio_actual_ex = float(pos.get('markPrice', precio_entrada_ex))
                         
@@ -316,7 +340,6 @@ if BOT_ENCENDIDO:
                 v_base = tickers[symbol]['baseVolume']
                 volumen_24h = float(v_base * precio_actual if v_base is not None else 0.0)
                 
-                # Cargar el historial de velas
                 velas = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=2)
                 if len(velas) < 2: continue
                 
@@ -325,7 +348,7 @@ if BOT_ENCENDIDO:
                 precio_actual_15m = float(vela_actual[4])
                 variacion_vela_real = ((precio_actual_15m - precio_apertura_15m) / precio_apertura_15m) * 100
                 
-                # Calcular volumen exclusivo de la vela actual para concordar con la barra lateral
+                # Calcular volumen exclusivo de la vela actual
                 volumen_vela_actual = float(vela_actual[5] * precio_actual_15m)
                 
                 datos_consola.append({
@@ -336,7 +359,7 @@ if BOT_ENCENDIDO:
                     "Volumen 24h": f"${volumen_24h:,.0f} USD"
                 })
                 
-                # FILTROS DE DISPARO
+                # FILTROS DE ENTRADA
                 if token_curr in st.session_state.operaciones_activas or len(st.session_state.operaciones_activas) >= 10:
                     continue
                     
@@ -349,7 +372,7 @@ if BOT_ENCENDIDO:
                 elif variacion_vela_real <= -UMBRAL: 
                     direccion_disparo = "SHORT"
 
-                # OPTIMIZACIÓN MULTI-ENTRY: Si falla una orden, el bucle continúa buscando las demás monedas
+                # DISPARO MULTI-ENTRY OPTIMIZADO CON TABULACIONES LIMPIAS
                 if direccion_disparo:
                     exito = abrir_posicion_con_trailing(symbol, direccion_disparo, precio_actual_15m)
                     if exito:
@@ -359,7 +382,7 @@ if BOT_ENCENDIDO:
             except Exception as e: 
                 consola_errores.error(f"❌ Error al intentar abrir {token_curr}: {e}")
                 continue
-                                
+                
         if datos_consola:
             df_consola = pd.DataFrame(datos_consola)
             df_consola["Var_Abs"] = df_consola["Variación Vela (15m)"].abs()
