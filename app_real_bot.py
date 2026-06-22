@@ -357,8 +357,9 @@ if BOT_ENCENDIDO:
                     else:
                         consola_errores.warning(f"⚠️ Exchange rechazó orden para {token_curr}. Pasando al siguiente candidato...")
             except Exception as e: 
+                consola_errores.error(f"❌ Error al intentar abrir {token_curr}: {e}")
                 continue
-                
+                                
         if datos_consola:
             df_consola = pd.DataFrame(datos_consola)
             df_consola["Var_Abs"] = df_consola["Variación Vela (15m)"].abs()
