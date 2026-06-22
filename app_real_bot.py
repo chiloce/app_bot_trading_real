@@ -158,7 +158,7 @@ if BOT_ENCENDIDO:
 
     dict_sincronizado = {}
 
-    # SINCRONIZACIÓN DIRECTA DESDE EXCHANGE BLINDADA
+    # SINCRONIZACIÓN DIRECTA DESDE EXCHANGE BLINDADA (CORREGIDA CON PRECIO DE ENTRADA REAL)
     try:
         posiciones_exchange = exchange.fetch_positions()
         if isinstance(posiciones_exchange, list):
@@ -178,10 +178,11 @@ if BOT_ENCENDIDO:
                         if token_ex in st.session_state.operaciones_activas:
                             dict_sincronizado[token_ex] = st.session_state.operaciones_activas[token_ex]
                         else:
+                            # CORRECCIÓN: Sincroniza usando precio_entrada_ex para evitar rangos inflados
                             if direccion_ex == "LONG":
-                                stop_sucio = precio_actual_ex * (1 - (TRAILING_PERC / 100))
+                                stop_sucio = precio_entrada_ex * (1 - (TRAILING_PERC / 100))
                             else:
-                                stop_sucio = precio_actual_ex * (1 + (TRAILING_PERC / 100))
+                                stop_sucio = precio_entrada_ex * (1 + (TRAILING_PERC / 100))
                             
                             stop_inicial = float(exchange.price_to_precision(symbol_ex, stop_sucio))
                                 
@@ -256,7 +257,7 @@ if BOT_ENCENDIDO:
     if necesita_rerun:
         st.rerun()
 
-    # PANEL INTERACTIVO DE OPERACIONES ACTIVAS (BLINDADO CONTRA DATAFRAMES VACÍOS)
+    # PANEL INTERACTIVO DE OPERACIONES ACTIVAS (BLINDADO)
     columnas_orden = ["Par", "Dirección", "Precio Entrada", "Cantidad", "Valor Nominal", "Trailing Stop Activo", "Precio Extremo", "Cerrar Trade"]
     
     if st.session_state.operaciones_activas:
@@ -285,7 +286,6 @@ if BOT_ENCENDIDO:
                     st.rerun()
                 except Exception as e: pass
     else:
-        # Si está vacío, forzamos un DataFrame vacío estructurado para evitar el KeyError en Pandas
         df_vacio = pd.DataFrame(columns=columnas_orden)
         monitor_operacion.data_editor(df_vacio, width='stretch', disabled=columnas_orden, key="editor_posiciones_vacio")
         monitor_operacion.info("Sincronizado. Sin posiciones abiertas en BingX en este momento.")
@@ -361,14 +361,15 @@ if BOT_ENCENDIDO:
     except Exception as e:
         print(f"Error crítico en escaneo masivo: {e}")
 
-    # PINTAR EL HISTORIAL DE TRADES
-    if st.session_state.historial_trades:
-        df_historial = pd.DataFrame(st.session_state.historial_trades)
-        tabla_historial.dataframe(df_historial, width='stretch')
-    else:
-        tabla_historial.info("Aún no hay operaciones cerradas en esta sesión.")
+# PINTAR EL HISTORIAL DE TRADES
+if st.session_state.historial_trades:
+    df_historial = pd.DataFrame(st.session_state.historial_trades)
+    tabla_historial.dataframe(df_historial, width='stretch')
+else:
+    tabla_historial.info("Aún no hay operaciones cerradas en esta sesión.")
 
-    # REFRESCAR CADA 5 SEGUNDOS
+# REFRESCAR CADA 5 SEGUNDOS
+if BOT_ENCENDIDO:
     time.sleep(5)
     st.rerun()
 else:
