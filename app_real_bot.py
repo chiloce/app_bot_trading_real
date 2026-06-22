@@ -59,7 +59,7 @@ if 'operaciones_activas' not in st.session_state:
 if 'historial_trades' not in st.session_state:
     st.session_state.historial_trades = []
 
-# Contenedores visuales fijos
+# Contenedores visuales fijos principales
 metrica_estado = st.empty()
 panel_balance = st.columns(3)
 p1 = panel_balance[0].empty()
@@ -68,7 +68,7 @@ p3 = panel_balance[2].empty()
 
 st.markdown("---")
 st.subheader("📊 Panel de Operaciones Activas (Sincronizado con Exchange)")
-monitor_operacion = st.container()
+monitor_operacion = st.empty()
 
 st.markdown("---")
 st.subheader("🔍 Monitoreo del Mercado en Vivo (Filtro Inteligente de Impulso)")
@@ -78,35 +78,6 @@ st.markdown("---")
 st.subheader("📜 Historial de Operaciones Cerradas")
 tabla_historial = st.empty()
 consola_errores = st.empty()
-
-# MÓDULO DE ACTUALIZACIÓN DE BALANCE (VST) - BLINDADO CONTRA ERRORES DE INDICE
-try:
-    balance = exchange.fetch_balance(params={'currency': 'VST'})
-    # Extracción segura usando CCXT unificado primero, si falla va al info crudo de forma tolerante
-    vst_libre = float(balance.get('free', {}).get('VST', 0.0))
-    vst_total = float(balance.get('total', {}).get('VST', 0.0))
-    
-    if vst_total == 0.0 and 'info' in balance and 'data' in balance['info']:
-        data_bal = balance['info']['data']
-        if isinstance(data_bal, dict) and 'balance' in data_bal:
-            vst_libre = float(data_bal['balance'].get('availableMargin', 0.0))
-            vst_total = float(data_bal['balance'].get('equity', 0.0))
-        elif isinstance(data_bal, list) and len(data_bal) > 0:
-            vst_libre = float(data_bal[0].get('availableMargin', 0.0))
-            vst_total = float(data_bal[0].get('equity', 0.0))
-
-    p1.metric(label="💰 Capital Total (VST)", value=f"{vst_total:,.2f} VST")
-    p2.metric(label="🔓 Margen Disponible", value=f"{vst_libre:,.2f} VST")
-    p3.metric(label="🔄 Ranuras Usadas", value=f"{len(st.session_state.operaciones_activas)} de 10 abiertas")
-except Exception as e:
-    consola_errores.error(f"⚠️ Aviso balance VST: {e}")
-
-if BOT_ENCENDIDO:
-    metrica_estado.success(f"🟢 BOT ENCENDIDO | Escaneando el mercado a alta velocidad sin bloqueos...")
-else:
-    metrica_estado.warning("🔴 BOT APAGADO | El modo de trading automático está desactivado.")
-    with monitor_operacion:
-        st.info("Enciende el bot en la barra lateral para comenzar a buscar entradas.")
 
 # =====================================================================
 # FUNCIONES DE TRADING (BINGX)
@@ -153,9 +124,39 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         return False
 
 # =====================================================================
-# MOTOR DE ESCANEO Y SINCRONIZACIÓN CONTINUA
+# MOTOR EN FRAGMENTO (ELIMINA EL PARPADEO VISUAL COMPLETAMENTE)
 # =====================================================================
-if BOT_ENCENDIDO:
+@st.fragment(run_every=5)
+def ejecutar_bucle_bot():
+    # Pintar Estado del Bot fijo sin recarga total
+    if BOT_ENCENDIDO:
+        metrica_estado.success(f"🟢 BOT ENCENDIDO | Escaneando el mercado a alta velocidad sin parpadeos visuales...")
+    else:
+        metrica_estado.warning("🔴 BOT APAGADO | El modo de trading automático está desactivado.")
+        monitor_operacion.info("Enciende el bot en la barra lateral para comenzar a buscar entradas.")
+        return
+
+    # MÓDULO DE ACTUALIZACIÓN DE BALANCE (VST)
+    try:
+        balance = exchange.fetch_balance(params={'currency': 'VST'})
+        vst_libre = float(balance.get('free', {}).get('VST', 0.0))
+        vst_total = float(balance.get('total', {}).get('VST', 0.0))
+        
+        if vst_total == 0.0 and 'info' in balance and 'data' in balance['info']:
+            data_bal = balance['info']['data']
+            if isinstance(data_bal, dict) and 'balance' in data_bal:
+                vst_libre = float(data_bal['balance'].get('availableMargin', 0.0))
+                vst_total = float(data_bal['balance'].get('equity', 0.0))
+            elif isinstance(data_bal, list) and len(data_bal) > 0:
+                vst_libre = float(data_bal[0].get('availableMargin', 0.0))
+                vst_total = float(data_bal[0].get('equity', 0.0))
+
+        p1.metric(label="💰 Capital Total (VST)", value=f"{vst_total:,.2f} VST")
+        p2.metric(label="🔓 Margen Disponible", value=f"{vst_libre:,.2f} VST")
+        p3.metric(label="🔄 Ranuras Usadas", value=f"{len(st.session_state.operaciones_activas)} de 10 abiertas")
+    except Exception as e:
+        consola_errores.error(f"⚠️ Aviso balance VST: {e}")
+
     try:
         mercados = exchange.load_markets()
         PARES_A_REVISAR = [symbol for symbol in mercados.keys() if symbol.endswith('/USDT:USDT')]
@@ -257,36 +258,34 @@ if BOT_ENCENDIDO:
             print(f"Error trailing: {e}")
 
     # PANEL INTERACTIVO DE OPERACIONES ACTIVAS
-    with monitor_operacion:
-        if st.session_state.operaciones_activas:
-            df_op = pd.DataFrame(st.session_state.operaciones_activas.values())
-            df_op["Cerrar Trade"] = False
-            columnas_orden = ["Par", "Dirección", "Precio Entrada", "Cantidad", "Valor Nominal", "Trailing Stop Activo", "Precio Máximo Alcanzado", "Cerrar Trade"]
-            
-            # Corregido use_container_width por width='stretch'
-            evento_cierre = st.data_editor(
-                df_op[columnas_orden],
-                column_config={"Cerrar Trade": st.column_config.CheckboxColumn("Cerrar de Emergencia", default=False)},
-                disabled=["Par", "Dirección", "Precio Entrada", "Cantidad", "Valor Nominal", "Trailing Stop Activo", "Precio Máximo Alcanzado"],
-                width='stretch', key="editor_posiciones"
-            )
-            
-            for i, row in evento_cierre.iterrows():
-                if row["Cerrar Trade"] == True:
-                    token_a_cerrar = row["Par"]
-                    op_detalles = st.session_state.operaciones_activas[token_a_cerrar]
-                    lado_cierre = 'sell' if op_detalles["Dirección"] == 'LONG' else 'buy'
-                    try:
-                        exchange.create_market_order(op_detalles["Symbol_Completo"], lado_cierre, amount=op_detalles["Cantidad"], params={'marginType': 'VST', 'positionSide': op_detalles["Dirección"]})
-                        del st.session_state.operaciones_activas[token_a_cerrar]
-                        st.session_state.historial_trades.append({
-                            "Fecha/Hora": time.strftime("%Y-%m-%d %H:%M:%S"), "Par": token_a_cerrar, "Dirección": op_detalles["Dirección"],
-                            "Precio Entrada": op_detalles["Precio Entrada"], "Precio Cierre": "Manual Web", "PnL Estimado": "Manual"
-                        })
-                        st.rerun()
-                    except Exception as e: pass
-        else:
-            st.info("Sincronizado. Sin posiciones abiertas en BingX en este momento.")
+    if st.session_state.operaciones_activas:
+        df_op = pd.DataFrame(st.session_state.operaciones_activas.values())
+        df_op["Cerrar Trade"] = False
+        columnas_orden = ["Par", "Dirección", "Precio Entrada", "Cantidad", "Valor Nominal", "Trailing Stop Activo", "Precio Máximo Alcanzado", "Cerrar Trade"]
+        
+        evento_cierre = monitor_operacion.data_editor(
+            df_op[columnas_orden],
+            column_config={"Cerrar Trade": st.column_config.CheckboxColumn("Cerrar de Emergencia", default=False)},
+            disabled=["Par", "Dirección", "Precio Entrada", "Cantidad", "Valor Nominal", "Trailing Stop Activo", "Precio Máximo Alcanzado"],
+            width='stretch', key="editor_posiciones"
+        )
+        
+        for i, row in evento_cierre.iterrows():
+            if row["Cerrar Trade"] == True:
+                token_a_cerrar = row["Par"]
+                op_detalles = st.session_state.operaciones_activas[token_a_cerrar]
+                lado_cierre = 'sell' if op_detalles["Dirección"] == 'LONG' else 'buy'
+                try:
+                    exchange.create_market_order(op_detalles["Symbol_Completo"], lado_cierre, amount=op_detalles["Cantidad"], params={'marginType': 'VST', 'positionSide': op_detalles["Dirección"]})
+                    del st.session_state.operaciones_activas[token_a_cerrar]
+                    st.session_state.historial_trades.append({
+                        "Fecha/Hora": time.strftime("%Y-%m-%d %H:%M:%S"), "Par": token_a_cerrar, "Dirección": op_detalles["Dirección"],
+                        "Precio Entrada": op_detalles["Precio Entrada"], "Precio Cierre": "Manual Web", "PnL Estimado": "Manual"
+                    })
+                    st.rerun()
+                except Exception as e: pass
+    else:
+        monitor_operacion.info("Sincronizado. Sin posiciones abiertas en BingX en este momento.")
 
     # 🔍 PASO 3: ESCANEO HÍBRIDO DE MERCADO (ALTA VELOCIDAD Y ACTUALIZACIÓN EN VIVO)
     datos_consola = []
@@ -351,21 +350,17 @@ if BOT_ENCENDIDO:
             df_consola = df_consola.sort_values(by="Var_Abs", ascending=False).drop(columns=["Var_Abs"])
             
             df_consola["Variación Vela (15m)"] = df_consola["Variación Vela (15m)"].map(lambda x: f"{x:+.3f}%")
-            # Corregido use_container_width por width='stretch'
             consola_monitoreo.dataframe(df_consola, width='stretch')
 
     except Exception as e:
         print(f"Error crítico en escaneo masivo: {e}")
 
-# PINTAR EL HISTORIAL DE TRADES
-if st.session_state.historial_trades:
-    df_historial = pd.DataFrame(st.session_state.historial_trades)
-    # Corregido use_container_width por width='stretch'
-    tabla_historial.dataframe(df_historial, width='stretch')
-else:
-    tabla_historial.info("Aún no hay operaciones cerradas en esta sesión.")
+    # PINTAR EL HISTORIAL DE TRADES
+    if st.session_state.historial_trades:
+        df_historial = pd.DataFrame(st.session_state.historial_trades)
+        tabla_historial.dataframe(df_historial, width='stretch')
+    else:
+        tabla_historial.info("Aún no hay operaciones cerradas en esta sesión.")
 
-# REFRESCAR CADA 5 SEGUNDOS
-if BOT_ENCENDIDO:
-    time.sleep(5)
-    st.rerun()
+# Lanza la ejecución silenciosa del fragmento
+ejecutar_bucle_bot()
