@@ -176,9 +176,9 @@ if BOT_ENCENDIDO:
 
     try:
         mercados = exchange.load_markets()
-        PARES_A_REVISAR = [symbol for symbol in mercados.keys() if symbol.endswith('/USDT:USDT')]
+        PARES_A_REVISAR = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
     except Exception as e:
-        PARES_A_REVISAR = ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"]
+        PARES_A_REVISAR = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
 
     dict_sincronizado = {}
 
