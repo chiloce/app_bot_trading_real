@@ -34,7 +34,7 @@ VOLUMEN_MINIMO = st.sidebar.number_input("Volumen mínimo en vela (USDT)", value
 TRAILING_PERC = st.sidebar.slider("Trailing Stop (%)", min_value=0.5, max_value=5.0, value=3.0, step=0.1)
 
 # =====================================================================
-# INICIALIZACIÓN CRÍTICA DEL ESTADO DE SESIÓN
+# INICIALIZACIÓN CRÍTICA DEL ESTADO DE SESIÓN (OBLIGATORIO AL INICIO)
 # =====================================================================
 if 'operaciones_activas' not in st.session_state:
     st.session_state.operaciones_activas = {}
@@ -171,7 +171,6 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
 # MOTOR DE ESCANEO Y SINCRONIZACIÓN CONTINUA
 # =====================================================================
 if BOT_ENCENDIDO:
-    # Filtro automático para escanear todas las altcoins de BingX
     try:
         mercados = exchange.load_markets()
         PARES_A_REVISAR = [symbol for symbol in mercados.keys() if symbol.endswith('/USDT:USDT')]
@@ -180,14 +179,15 @@ if BOT_ENCENDIDO:
 
     dict_sincronizado = {}
 
-    # 1. ETAPA DE IMPORTACIÓN REAL DESDE BINGX BLINDADA CONTRA SPAM
+    # 1. ETAPA DE IMPORTACIÓN REAL BLINDADA CONTRA NONE Y SPAM
     try:
         posiciones_exchange = exchange.fetch_positions()
         if isinstance(posiciones_exchange, list):
             for pos in posiciones_exchange:
                 if not isinstance(pos, dict): continue
+                
                 amount_pos = pos.get('contracts')
-                cantidad_ex = float(amount_pos if amount_pos is not None else 0)
+                cantidad_ex = float(amount_pos) if amount_pos is not None else 0.0
                 
                 if cantidad_ex > 0:
                     symbol_ex = pos.get('symbol')
@@ -196,10 +196,15 @@ if BOT_ENCENDIDO:
                     
                     if symbol_ex in PARES_A_REVISAR:
                         direccion_ex = str(pos.get('side', '')).upper()
-                        precio_entrada_ex = float(pos.get('entryPrice', 0))
-                        precio_actual_ex = float(pos.get('markPrice', precio_entrada_ex))
                         
-                        # PREVENCIÓN DE DUPLICADOS TOTAL: Si ya existe en memoria, conserva sus stops
+                        precio_entrada_raw = pos.get('entryPrice')
+                        precio_entrada_ex = float(precio_entrada_raw) if precio_entrada_raw is not None else 0.0
+                        
+                        precio_actual_raw = pos.get('markPrice')
+                        precio_actual_ex = float(precio_actual_raw) if precio_actual_raw is not None else precio_entrada_ex
+                        
+                        if precio_entrada_ex == 0.0: continue
+                        
                         if token_ex in st.session_state.operaciones_activas:
                             dict_sincronizado[token_ex] = st.session_state.operaciones_activas[token_ex]
                         else:
@@ -329,7 +334,6 @@ if BOT_ENCENDIDO:
                     "Volumen Vela": volumen_vela_actual
                 })
                 
-                # Bloqueo estricto de duplicados antes de disparar la orden
                 if token_curr in st.session_state.operaciones_activas or len(st.session_state.operaciones_activas) >= 10:
                     continue
                     
