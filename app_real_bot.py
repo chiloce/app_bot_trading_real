@@ -115,7 +115,7 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         st.session_state.operaciones_activas[token] = {
             "Par": token, "Symbol_Completo": symbol, "Dirección": direccion, "Precio Entrada": precio_actual,
             "Cantidad": cantidad, "Valor Nominal": f"${MARGEN_USD * LEVERAGE} USD",
-            "Trailing Stop Activo": stop_inicial, "Precio Máximo/Mínimo": float(precio_actual)
+            "Trailing Stop Activo": stop_inicial, "Precio Extremo": float(precio_actual)
         }
         
         enviar_alerta(f"🛒 ¡ENTRADA POR IMPULSO DISPARADA!\n\nPar: {token}\nDirección: {direccion}\nPrecio: {precio_actual} USDT")
@@ -188,7 +188,7 @@ if BOT_ENCENDIDO:
                             dict_sincronizado[token_ex] = {
                                 "Par": token_ex, "Symbol_Completo": symbol_ex, "Dirección": direccion_ex, "Precio Entrada": precio_entrada_ex,
                                 "Cantidad": cantidad_ex, "Valor Nominal": f"${cantidad_ex * precio_entrada_ex:.1f} USD",
-                                "Trailing Stop Activo": stop_inicial, "Precio Máximo/Mínimo": float(precio_actual_ex)
+                                "Trailing Stop Activo": stop_inicial, "Precio Extremo": float(precio_actual_ex)
                             }
             st.session_state.operaciones_activas = dict_sincronizado
     except Exception as e:
@@ -209,13 +209,13 @@ if BOT_ENCENDIDO:
             
             direccion = op.get("Dirección")
             stop_actual = op.get("Trailing Stop Activo")
-            extremo_precio = op.get("Precio Máximo/Mínimo")
+            extremo_precio = op.get("Precio Extremo")
             precio_entrada = op.get("Precio Entrada")
             cant = op.get("Cantidad")
             
             if direccion == "LONG":
                 if precio_vivo > extremo_precio:
-                    st.session_state.operaciones_activas[token]["Precio Máximo/Mínimo"] = precio_vivo
+                    st.session_state.operaciones_activas[token]["Precio Extremo"] = precio_vivo
                     nuevo_stop_sucio = precio_vivo * (1 - (TRAILING_PERC / 100))
                     nuevo_stop = float(exchange.price_to_precision(symbol_activo, nuevo_stop_sucio))
                     if nuevo_stop > stop_actual:
@@ -234,7 +234,7 @@ if BOT_ENCENDIDO:
                     
             elif direccion == "SHORT":
                 if precio_vivo < extremo_precio:
-                    st.session_state.operaciones_activas[token]["Precio Máximo/Mínimo"] = precio_vivo
+                    st.session_state.operaciones_activas[token]["Precio Extremo"] = precio_vivo
                     nuevo_stop_sucio = precio_vivo * (1 + (TRAILING_PERC / 100))
                     nuevo_stop = float(exchange.price_to_precision(symbol_activo, nuevo_stop_sucio))
                     if nuevo_stop < stop_actual:
@@ -256,17 +256,17 @@ if BOT_ENCENDIDO:
     if necesita_rerun:
         st.rerun()
 
-    # PANEL INTERACTIVO DE OPERACIONES ACTIVAS
+    # PANEL INTERACTIVO DE OPERACIONES ACTIVAS (BLINDADO CONTRA DATAFRAMES VACÍOS)
+    columnas_orden = ["Par", "Dirección", "Precio Entrada", "Cantidad", "Valor Nominal", "Trailing Stop Activo", "Precio Extremo", "Cerrar Trade"]
+    
     if st.session_state.operaciones_activas:
         df_op = pd.DataFrame(st.session_state.operaciones_activas.values())
         df_op["Cerrar Trade"] = False
-        # COLUMNA SINCRONIZADA VISUALMENTE AQUÍ: "Precio Máximo/Mínimo"
-        columnas_orden = ["Par", "Dirección", "Precio Entrada", "Cantidad", "Valor Nominal", "Trailing Stop Activo", "Precio Máximo/Mínimo", "Cerrar Trade"]
         
         evento_cierre = monitor_operacion.data_editor(
             df_op[columnas_orden],
             column_config={"Cerrar Trade": st.column_config.CheckboxColumn("Cerrar de Emergencia", default=False)},
-            disabled=["Par", "Dirección", "Precio Entrada", "Cantidad", "Valor Nominal", "Trailing Stop Activo", "Precio Máximo/Mínimo"],
+            disabled=["Par", "Dirección", "Precio Entrada", "Cantidad", "Valor Nominal", "Trailing Stop Activo", "Precio Extremo"],
             width='stretch', key="editor_posiciones"
         )
         
@@ -285,6 +285,9 @@ if BOT_ENCENDIDO:
                     st.rerun()
                 except Exception as e: pass
     else:
+        # Si está vacío, forzamos un DataFrame vacío estructurado para evitar el KeyError en Pandas
+        df_vacio = pd.DataFrame(columns=columnas_orden)
+        monitor_operacion.data_editor(df_vacio, width='stretch', disabled=columnas_orden, key="editor_posiciones_vacio")
         monitor_operacion.info("Sincronizado. Sin posiciones abiertas en BingX en este momento.")
 
     # 🔍 PASO 3: ESCANEO HÍBRIDO DE MERCADO
