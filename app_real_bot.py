@@ -97,7 +97,7 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         cantidad = calcular_cantidad_contratos(symbol, precio_actual)
         if cantidad == 0: return False
         
-        # Redondeo estricto de contratos para evitar fallos de precisión en la Testnet
+        # Redondeo seguro para evitar fallos de precisión en contratos
         if cantidad >= 1:
             cantidad = float(int(cantidad))
         else:
@@ -105,31 +105,30 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
             
         if cantidad <= 0: return False
 
-        # Configuración previa del apalancamiento
+        # Configuración del apalancamiento previo
         try:
             exchange.set_leverage(int(LEVERAGE), symbol, params={'side': direccion})
             time.sleep(0.1)
         except Exception:
             pass
         
-        # Mapeo de parámetros nativos corregidos para BingX
+        lado_ccxt = 'buy' if direccion == 'LONG' else 'sell'
+        
         if direccion == 'LONG':
-            lado_ccxt = 'buy'
-            lado_native = 'BUY'
             stop_sucio = precio_actual * (1 - (TRAILING_PERC / 100))
         else:
-            lado_ccxt = 'sell'
-            lado_native = 'SELL'
             stop_sucio = precio_actual * (1 + (TRAILING_PERC / 100))
             
+        # Parámetros unificados correctos para la orden de mercado en la Testnet
         params_entrada = {
-            'side': lado_native
+            'positionSide': direccion,
+            'marginType': 'VST'
         }
         
-        # Ejecución de la orden de mercado
+        # Enviar orden de mercado limpia
         orden_entrada = exchange.create_market_order(symbol, lado_ccxt, amount=cantidad, params=params_entrada)
         
-        # Guardar en memoria interna usando price_to_string
+        # Guardar en memoria de sesión usando price_to_string
         stop_inicial = float(exchange.price_to_string(symbol, stop_sucio))
             
         st.session_state.operaciones_activas[token] = {
@@ -141,7 +140,7 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         enviar_alerta(f"🛒 ¡ENTRADA POR IMPULSO DISPARADA!\n\nPar: {token}\nDirección: {direccion}\nPrecio: {precio_actual} USDT")
         return True
     except Exception as e:
-        consola_errores.error(f"❌ Error al intentar abrir {token}: {e}")
+        consola_errores.error(f"❌ Error interno en envío de orden para {token}: {e}")
         return False
 
 # =====================================================================
@@ -150,7 +149,7 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
 if BOT_ENCENDIDO:
     metrica_estado.success(f"🟢 BOT ENCENDIDO | Escaneando el mercado de forma segura...")
     
-    # MÓDULO DE ACTUALIZACIÓN DE BALANCE (VST) - PROTEGIDO CONTRA ERRORES DE TIPO
+    # MÓDULO DE ACTUALIZACIÓN DE BALANCE (VST)
     vst_libre = 0.0
     vst_total = 0.0
     try:
@@ -174,15 +173,16 @@ if BOT_ENCENDIDO:
     except Exception as e:
         consola_errores.error(f"⚠️ Aviso balance VST: {e}")
 
+    # CARGA COMPLETA DE ALTCOINS (MERCADO GENERAL)
     try:
         mercados = exchange.load_markets()
-        PARES_A_REVISAR = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
+        PARES_A_REVISAR = [symbol for symbol in mercados.keys() if symbol.endswith('/USDT:USDT')]
     except Exception as e:
-        PARES_A_REVISAR = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
+        PARES_A_REVISAR = ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"]
 
     dict_sincronizado = {}
 
-    # SINCRONIZACIÓN DIRECTA DESDE EXCHANGE BLINDADA CONTRA LISTAS
+    # SINCRONIZACIÓN DIRECTA DESDE EXCHANGE BLINDADA
     try:
         posiciones_exchange = exchange.fetch_positions()
         if isinstance(posiciones_exchange, list):
@@ -348,7 +348,6 @@ if BOT_ENCENDIDO:
                 precio_actual_15m = float(vela_actual[4])
                 variacion_vela_real = ((precio_actual_15m - precio_apertura_15m) / precio_apertura_15m) * 100
                 
-                # Calcular volumen exclusivo de la vela actual
                 volumen_vela_actual = float(vela_actual[5] * precio_actual_15m)
                 
                 datos_consola.append({
@@ -372,7 +371,7 @@ if BOT_ENCENDIDO:
                 elif variacion_vela_real <= -UMBRAL: 
                     direccion_disparo = "SHORT"
 
-                # DISPARO MULTI-ENTRY OPTIMIZADO CON TABULACIONES LIMPIAS
+                # DISPARO MULTI-ENTRY OPTIMIZADO
                 if direccion_disparo:
                     exito = abrir_posicion_con_trailing(symbol, direccion_disparo, precio_actual_15m)
                     if exito:
