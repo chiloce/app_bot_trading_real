@@ -110,7 +110,6 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         else:
             stop_sucio = precio_actual * (1 + (TRAILING_PERC / 100))
             
-        # CORREGIDO: price_to_string para evitar errores de versión en CCXT
         stop_inicial = float(exchange.price_to_string(symbol, stop_sucio))
             
         st.session_state.operaciones_activas[token] = {
@@ -128,7 +127,7 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
 # BUCLE PRINCIPAL DE EJECUCIÓN (LÓGICA LINEAL SEGURA)
 # =====================================================================
 if BOT_ENCENDIDO:
-    metrica_estado.success(f"🟢 BOT ENCENDIDO | Escaneando el mercado de forma segura y optimizada...")
+    metrica_estado.success(f"🟢 BOT ENCENDIDO | Escaneando el mercado de forma segura...")
     
     # MÓDULO DE ACTUALIZACIÓN DE BALANCE (VST)
     try:
@@ -185,7 +184,6 @@ if BOT_ENCENDIDO:
                             else:
                                 stop_sucio = precio_entrada_ex * (1 + (TRAILING_PERC / 100))
                             
-                            # CORREGIDO: price_to_string
                             stop_inicial = float(exchange.price_to_string(symbol_ex, stop_sucio))
                                 
                             dict_sincronizado[token_ex] = {
@@ -220,7 +218,6 @@ if BOT_ENCENDIDO:
                 if precio_vivo > extremo_precio:
                     st.session_state.operaciones_activas[token]["Precio Extremo"] = precio_vivo
                     nuevo_stop_sucio = precio_vivo * (1 - (TRAILING_PERC / 100))
-                    # CORREGIDO: price_to_string
                     nuevo_stop = float(exchange.price_to_string(symbol_activo, nuevo_stop_sucio))
                     if nuevo_stop > stop_actual:
                         st.session_state.operaciones_activas[token]["Trailing Stop Activo"] = nuevo_stop
@@ -240,7 +237,6 @@ if BOT_ENCENDIDO:
                 if precio_vivo < extremo_precio:
                     st.session_state.operaciones_activas[token]["Precio Extremo"] = precio_vivo
                     nuevo_stop_sucio = precio_vivo * (1 + (TRAILING_PERC / 100))
-                    # CORREGIDO: price_to_string
                     nuevo_stop = float(exchange.price_to_string(symbol_activo, nuevo_stop_sucio))
                     if nuevo_stop < stop_actual:
                         st.session_state.operaciones_activas[token]["Trailing Stop Activo"] = nuevo_stop
@@ -294,7 +290,7 @@ if BOT_ENCENDIDO:
         monitor_operacion.data_editor(df_vacio, width='stretch', disabled=columnas_orden, key="editor_posiciones_vacio")
         monitor_operacion.info("Sincronizado. Sin posiciones abiertas en BingX en este momento.")
 
-    # 🔍 PASO 3: ESCANEO HÍBRIDO DE MERCADO
+    # 🔍 PASO 3: ESCANEO HÍBRIDO DE MERCADO (OPTIMIZADO MULTI-ENTRY)
     datos_consola = []
     
     try:
@@ -320,6 +316,7 @@ if BOT_ENCENDIDO:
                 v_base = tickers[symbol]['baseVolume']
                 volumen_24h = float(v_base * precio_actual if v_base is not None else 0.0)
                 
+                # Cargar el historial de velas
                 velas = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=2)
                 if len(velas) < 2: continue
                 
@@ -327,6 +324,9 @@ if BOT_ENCENDIDO:
                 precio_apertura_15m = float(vela_actual[1])
                 precio_actual_15m = float(vela_actual[4])
                 variacion_vela_real = ((precio_actual_15m - precio_apertura_15m) / precio_apertura_15m) * 100
+                
+                # Calcular volumen exclusivo de la vela actual para concordar con la barra lateral
+                volumen_vela_actual = float(vela_actual[5] * precio_actual_15m)
                 
                 datos_consola.append({
                     "Moneda": token_curr, 
@@ -336,10 +336,11 @@ if BOT_ENCENDIDO:
                     "Volumen 24h": f"${volumen_24h:,.0f} USD"
                 })
                 
+                # FILTROS DE DISPARO
                 if token_curr in st.session_state.operaciones_activas or len(st.session_state.operaciones_activas) >= 10:
                     continue
                     
-                if volumen_24h < VOLUMEN_MINIMO:
+                if volumen_vela_actual < VOLUMEN_MINIMO:
                     continue
                 
                 direccion_disparo = None
@@ -348,9 +349,13 @@ if BOT_ENCENDIDO:
                 elif variacion_vela_real <= -UMBRAL: 
                     direccion_disparo = "SHORT"
 
+                # OPTIMIZACIÓN MULTI-ENTRY: Si falla una orden, el bucle continúa buscando las demás monedas
                 if direccion_disparo:
-                    if abrir_posicion_con_trailing(symbol, direccion_disparo, precio_actual_15m):
+                    exito = abrir_posicion_con_trailing(symbol, direccion_disparo, precio_actual_15m)
+                    if exito:
                         st.rerun()
+                    else:
+                        consola_errores.warning(f"⚠️ Exchange rechazó orden para {token_curr}. Pasando al siguiente candidato...")
             except Exception as e: 
                 continue
                 
