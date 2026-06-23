@@ -98,17 +98,16 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         cantidad = calcular_cantidad_contratos(symbol, precio_actual)
         if cantidad <= 0: return False
         
-        # AJUSTE SEGURO DE PRECISIÓN SEGÚN REGLAS NATIVAS DE BINGX
+        # AJUSTE SEGURO DE PRECISIÓN REQUERIDO POR BINGX (SIN CORTE ENTERO TRUNCADO)
         try:
-            # Reemplaza el float(int()) que causaba desajustes en activos de centavos
             cantidad_ajustada = exchange.amount_to_precision(symbol, cantidad)
             cantidad = float(cantidad_ajustada)
         except Exception as pe:
-            print(f"Error formateando precisión para {token}: {pe}")
+            print(f"Error ajustando precisión para {token}: {pe}")
             
         if cantidad <= 0: return False
 
-        # Configuración previa de apalancamiento por seguridad
+        # Configuración del apalancamiento previo
         try:
             params_leverage = {'side': direccion}
             exchange.set_leverage(int(LEVERAGE), symbol, params=params_leverage)
@@ -119,7 +118,7 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         lado_entrada = 'buy' if direccion == 'LONG' else 'sell'
         params_entrada = { 'marginType': 'VST', 'positionSide': direccion }
         
-        # Envío unificado de la orden de mercado
+        # Enviar orden de mercado con los decimales exactos requeridos
         orden_entrada = exchange.create_market_order(symbol, lado_entrada, amount=cantidad, params=params_entrada)
         
         if direccion == "LONG":
