@@ -28,16 +28,10 @@ st.sidebar.header("⚙️ Parámetros de Trading")
 BOT_ENCENDIDO = st.sidebar.toggle("🤖 ACTIVAR BOT DE TRADING", value=False)
 TIMEFRAME = st.sidebar.selectbox("Temporalidad de Análisis", ["15m", "4h"], index=0)
 UMBRAL = st.sidebar.slider("Umbral de Disparo (%)", min_value=0.01, max_value=15.0, value=5.0, step=0.01)
-MARGEN_USD = st.sidebar.number_input("Margen de Entrada (USD)", min_value=1.0, value=10.0, step=1.0)
+MARGEN_USD = st.sidebar.number_input("Margen de Entrada (USD)", min_value=1.0, value=5.0, step=1.0)
 LEVERAGE = st.sidebar.number_input("Apalancamiento (X)", min_value=1, max_value=25, value=10, step=1)
-VOLUMEN_MINIMO = st.sidebar.number_input("Volumen mínimo en 24h (USDT)", value=500000, step=50000)
+VOLUMEN_MINIMO = st.sidebar.number_input("Volumen mínimo en vela (USDT)", value=10000, step=5000)
 TRAILING_PERC = st.sidebar.slider("Trailing Stop (%)", min_value=0.5, max_value=5.0, value=1.5, step=0.1)
-
-# INICIALIZACIÓN CRÍTICA DEL ESTADO DE SESIÓN (OBLIGATORIO AL INICIO)
-if 'operaciones_activas' not in st.session_state:
-    st.session_state.operaciones_activas = {}
-if 'historial_trades' not in st.session_state:
-    st.session_state.historial_trades = []
 
 # CONTENEDORES VISUALES FIJOS
 metrica_estado = st.empty()
@@ -79,6 +73,11 @@ try:
 except Exception as e:
     st.error(f"❌ Error crítico de conexión a BingX: {e}")
     st.stop()
+    
+if 'operaciones_activas' not in st.session_state:
+    st.session_state.operaciones_activas = {}
+if 'historial_trades' not in st.session_state:
+    st.session_state.historial_trades = []
 
 # =====================================================================
 # FUNCIONES DE TRADING (BINGX)
@@ -89,42 +88,49 @@ def calcular_cantidad_contratos(symbol, precio_actual):
         cantidad_bruta = valor_posicion_usd / precio_actual
         cantidad_ajustada = exchange.amount_to_precision(symbol, cantidad_bruta)
         return float(cantidad_ajustada)
-    except Exception:
+    except Exception as e:
         return 0
 
 def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
     try:
-        token = symbol.split('/')[0].upper()
+        token = symbol.split('/')[0]
         cantidad = calcular_cantidad_contratos(symbol, precio_actual)
-        if cantidad <= 0: return False
+        if cantidad == 0: return False
         
-        # Redondeo seguro adaptativo (No corta enteros drásticamente)
-        try:
-            cantidad_ajustada = exchange.amount_to_precision(symbol, cantidad)
-            cantidad = float(cantidad_ajustada)
-        except Exception as pe:
-            print(f"Error de precisión para {token}: {pe}")
+        # Redondeo seguro para evitar fallos de precisión en contratos
+        if cantidad >= 1:
+            cantidad = float(int(cantidad))
+        else:
+            cantidad = float(exchange.amount_to_precision(symbol, cantidad))
             
         if cantidad <= 0: return False
 
+        # Configuración del apalancamiento previo
         try:
-            params_leverage = {'side': direccion}
-            exchange.set_leverage(int(LEVERAGE), symbol, params=params_leverage)
-            time.sleep(0.2)
+            exchange.set_leverage(int(LEVERAGE), symbol, params={'side': direccion})
+            time.sleep(0.1)
         except Exception:
             pass
-            
-        lado_entrada = 'buy' if direccion == 'LONG' else 'sell'
-        params_entrada = { 'marginType': 'VST', 'positionSide': direccion }
-        orden_entrada = exchange.create_market_order(symbol, lado_entrada, amount=cantidad, params=params_entrada)
         
-        if direccion == "LONG":
+        lado_ccxt = 'buy' if direccion == 'LONG' else 'sell'
+        
+        if direccion == 'LONG':
             stop_sucio = precio_actual * (1 - (TRAILING_PERC / 100))
         else:
             stop_sucio = precio_actual * (1 + (TRAILING_PERC / 100))
             
-        stop_inicial = float(exchange.price_to_string(symbol, stop_sucio))
+        # Parámetros unificados correctos para la orden de mercado en la Testnet
+        params_entrada = {
+            'positionSide': direccion,
+            'marginType': 'VST'
+        }
         
+        # Enviar orden de mercado limpia
+        orden_entrada = exchange.create_market_order(symbol, lado_ccxt, amount=cantidad, params=params_entrada)
+        
+        # Guardar en memoria de sesión usando price_to_string
+        stop_inicial = float(exchange.price_to_string(symbol, stop_sucio))
+            
         st.session_state.operaciones_activas[token] = {
             "Par": token, "Symbol_Completo": symbol, "Dirección": direccion, "Precio Entrada": precio_actual,
             "Cantidad": cantidad, "Valor Nominal": f"${MARGEN_USD * LEVERAGE} USD",
@@ -134,71 +140,65 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         enviar_alerta(f"🛒 ¡ENTRADA POR IMPULSO DISPARADA!\n\nPar: {token}\nDirección: {direccion}\nPrecio: {precio_actual} USDT")
         return True
     except Exception as e:
-        consola_errores.error(f"❌ Error al intentar abrir {token}: {e}")
+        consola_errores.error(f"❌ Error interno en envío de orden para {token}: {e}")
         return False
 
 # =====================================================================
-# BUCLE PRINCIPAL DE EJECUCIÓN (LÓGICA SEGURA LINEAL)
+# BUCLE PRINCIPAL DE EJECUCIÓN (LÓGICA LINEAL SEGURA)
 # =====================================================================
 if BOT_ENCENDIDO:
-    metrica_estado.success(f"🟢 BOT ENCENDIDO | Escaneando el mercado de forma segura y optimizada...")
+    metrica_estado.success(f"🟢 BOT ENCENDIDO | Escaneando el mercado de forma segura...")
     
     # MÓDULO DE ACTUALIZACIÓN DE BALANCE (VST)
+    vst_libre = 0.0
+    vst_total = 0.0
     try:
         balance = exchange.fetch_balance(params={'currency': 'VST'})
-        vst_libre = float(balance.get('free', {}).get('VST', 0.0))
-        vst_total = float(balance.get('total', {}).get('VST', 0.0))
-        
-        if vst_total == 0.0 and 'info' in balance and 'data' in balance['info']:
-            data_bal = balance['info']['data']
-            if isinstance(data_bal, dict) and 'balance' in data_bal:
-                vst_libre = float(data_bal['balance'].get('availableMargin', 0.0))
-                vst_total = float(data_bal['balance'].get('equity', 0.0))
-            elif isinstance(data_bal, list) and len(data_bal) > 0:
-                vst_libre = float(data_bal[0].get('availableMargin', 0.0))
-                vst_total = float(data_bal[0].get('equity', 0.0))
-                
+        if isinstance(balance, dict):
+            vst_libre = float(balance.get('free', {}).get('VST', 0.0))
+            vst_total = float(balance.get('total', {}).get('VST', 0.0))
+            
+            if vst_total == 0.0 and 'info' in balance and isinstance(balance['info'], dict) and 'data' in balance['info']:
+                data_bal = balance['info']['data']
+                if isinstance(data_bal, dict) and 'balance' in data_bal and isinstance(data_bal['balance'], dict):
+                    vst_libre = float(data_bal['balance'].get('availableMargin', 0.0))
+                    vst_total = float(data_bal['balance'].get('equity', 0.0))
+                elif isinstance(data_bal, list) and len(data_bal) > 0 and isinstance(data_bal[0], dict):
+                    vst_libre = float(data_bal[0].get('availableMargin', 0.0))
+                    vst_total = float(data_bal[0].get('equity', 0.0))
+
         p1.metric(label="💰 Capital Total (VST)", value=f"{vst_total:,.2f} VST")
         p2.metric(label="🔓 Margen Disponible", value=f"{vst_libre:,.2f} VST")
         p3.metric(label="🔄 Ranuras Usadas", value=f"{len(st.session_state.operaciones_activas)} de 10 abiertas")
     except Exception as e:
         consola_errores.error(f"⚠️ Aviso balance VST: {e}")
 
-    # CARGA COMPLETA DE MERCADOS
+    # CARGA COMPLETA DE ALTCOINS (MERCADO GENERAL)
     try:
         mercados = exchange.load_markets()
         PARES_A_REVISAR = [symbol for symbol in mercados.keys() if symbol.endswith('/USDT:USDT')]
-    except Exception:
+    except Exception as e:
         PARES_A_REVISAR = ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"]
 
     dict_sincronizado = {}
 
-    # SINCRONIZACIÓN DIRECTA DESDE EXCHANGE BLINDADA (FLEXIBLE PARA TODO TIPO DE SÍMBOLOS)
+    # SINCRONIZACIÓN DIRECTA DESDE EXCHANGE BLINDADA
     try:
         posiciones_exchange = exchange.fetch_positions()
         if isinstance(posiciones_exchange, list):
             for pos in posiciones_exchange:
                 if not isinstance(pos, dict): continue
                 amount_pos = pos.get('contracts')
-                cantidad_ex = float(amount_pos) if amount_pos is not None else 0.0
-                
+                cantidad_ex = float(amount_pos if amount_pos is not None else 0)
                 if cantidad_ex > 0:
                     symbol_ex = pos.get('symbol')
                     if not symbol_ex: continue
+                    token_ex = symbol_ex.split('/')[0]
                     
-                    # Normalización flexible del token (Acepta cualquier diagonal o guion de altcoins)
-                    token_ex = symbol_ex.replace('-', '/').split('/')[0].upper()
-                    
-                    if 'USDT' in symbol_ex.upper():
+                    if symbol_ex in PARES_A_REVISAR:
                         direccion_ex = str(pos.get('side', '')).upper()
-                        
-                        precio_entrada_raw = pos.get('entryPrice')
-                        precio_entrada_ex = float(precio_entrada_raw) if precio_entrada_raw is not None else 0.0
-                        
-                        precio_actual_raw = pos.get('markPrice')
-                        precio_actual_ex = float(precio_actual_raw) if precio_actual_raw is not None else precio_entrada_ex
-                        
-                        if precio_entrada_ex == 0.0: continue
+                        precio_entrada_ex = float(pos.get('entryPrice', 0))
+                        precio_actual_ex = float(pos.get('markPrice', precio_entrada_ex))
                         
                         if token_ex in st.session_state.operaciones_activas:
                             dict_sincronizado[token_ex] = st.session_state.operaciones_activas[token_ex]
@@ -207,7 +207,7 @@ if BOT_ENCENDIDO:
                                 stop_sucio = precio_entrada_ex * (1 - (TRAILING_PERC / 100))
                             else:
                                 stop_sucio = precio_entrada_ex * (1 + (TRAILING_PERC / 100))
-                                
+                            
                             stop_inicial = float(exchange.price_to_string(symbol_ex, stop_sucio))
                                 
                             dict_sincronizado[token_ex] = {
@@ -283,6 +283,7 @@ if BOT_ENCENDIDO:
 
     # PANEL INTERACTIVO DE OPERACIONES ACTIVAS
     columnas_orden = ["Par", "Dirección", "Precio Entrada", "Cantidad", "Valor Nominal", "Trailing Stop Activo", "Precio Extremo", "Cerrar Trade"]
+    
     if st.session_state.operaciones_activas:
         df_op = pd.DataFrame(st.session_state.operaciones_activas.values())
         df_op["Cerrar Trade"] = False
@@ -307,81 +308,88 @@ if BOT_ENCENDIDO:
                         "Precio Entrada": op_detalles["Precio Entrada"], "Precio Cierre": "Manual Web", "PnL Estimado": "Manual"
                     })
                     st.rerun()
-                except Exception: pass
+                except Exception as e: pass
     else:
         df_vacio = pd.DataFrame(columns=columnas_orden)
         monitor_operacion.data_editor(df_vacio, width='stretch', disabled=columnas_orden, key="editor_posiciones_vacio")
         monitor_operacion.info("Sincronizado. Sin posiciones abiertas en BingX en este momento.")
 
-    # 🔍 PASO 3: ESCANEO HÍBRIDO DE MERCADO
+    # 🔍 PASO 3: ESCANEO HÍBRIDO DE MERCADO (OPTIMIZADO MULTI-ENTRY)
     datos_consola = []
+    
     try:
-        # CANDADO DE RIESGO ABSOLUTO: Bloquea la búsqueda si hay 10 o más posiciones activas
-        if len(st.session_state.operaciones_activas) >= 10:
-            consola_errores.info("🔒 Límite máximo de 10 slots alcanzado. Se suspende el escaneo para proteger las posiciones abiertas.")
-            top_15_symbols = []
-        else:
-            tickers = exchange.fetch_tickers(PARES_A_REVISAR)
-            pares_candidatos = []
-            for symbol in PARES_A_REVISAR:
-                if symbol in tickers:
-                    var_24h = tickers[symbol]['percentage']
-                    variacion_24h = float(var_24h if var_24h is not None else 0.0)
-                    pares_candidatos.append((symbol, abs(variacion_24h)))
-                    
-            pares_candidatos = sorted(pares_candidatos, key=lambda x: x[1], reverse=True)[:15]
-            top_15_symbols = [p[0] for p in pares_candidatos]
+        tickers = exchange.fetch_tickers(PARES_A_REVISAR)
         
-        for symbol in top_15_symbols:
-            try:
-                token_curr = symbol.split('/')[0].upper()
+        pares_candidatos = []
+        for symbol in PARES_A_REVISAR:
+            if symbol in tickers:
                 precio_actual = float(tickers[symbol]['last'])
                 var_24h = tickers[symbol]['percentage']
                 variacion_24h = float(var_24h if var_24h is not None else 0.0)
-                
+                pares_candidatos.append((symbol, abs(variacion_24h)))
+        
+        pares_candidatos = sorted(pares_candidatos, key=lambda x: x[1], reverse=True)[:15]
+        top_15_symbols = [p[0] for p in pares_candidatos]
+
+        for symbol in top_15_symbols:
+            try:
+                token_curr = symbol.split('/')[0]
+                precio_actual = float(tickers[symbol]['last'])
+                var_24h = tickers[symbol]['percentage']
+                variacion_24h = float(var_24h if var_24h is not None else 0.0)
                 v_base = tickers[symbol]['baseVolume']
                 volumen_24h = float(v_base * precio_actual if v_base is not None else 0.0)
                 
                 velas = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=2)
                 if len(velas) < 2: continue
+                
                 vela_actual = velas[-1]
                 precio_apertura_15m = float(vela_actual[1])
                 precio_actual_15m = float(vela_actual[4])
                 variacion_vela_real = ((precio_actual_15m - precio_apertura_15m) / precio_apertura_15m) * 100
                 
+                volumen_vela_actual = float(vela_actual[5] * precio_actual_15m)
+                
                 datos_consola.append({
-                    "Moneda": token_curr, "Precio Actual": f"{precio_actual_15m} USDT",
-                    "Movimiento 24h": f"{variacion_24h:+.2f}%", "Variación Vela (15m)": variacion_vela_real, 
+                    "Moneda": token_curr, 
+                    "Precio Actual": f"{precio_actual_15m} USDT",
+                    "Movimiento 24h": f"{variacion_24h:+.2f}%",
+                    "Variación Vela (15m)": variacion_vela_real, 
                     "Volumen 24h": f"${volumen_24h:,.0f} USD"
                 })
                 
-                # Control estricto pre-disparo
+                # FILTROS DE ENTRADA
                 if token_curr in st.session_state.operaciones_activas or len(st.session_state.operaciones_activas) >= 10:
                     continue
-                if volumen_24h < VOLUMEN_MINIMO:
+                    
+                if volumen_vela_actual < VOLUMEN_MINIMO:
                     continue
-                    
+                
                 direccion_disparo = None
-                if variacion_vela_real >= UMBRAL:
+                if variacion_vela_real >= UMBRAL: 
                     direccion_disparo = "LONG"
-                elif variacion_vela_real <= -UMBRAL:
+                elif variacion_vela_real <= -UMBRAL: 
                     direccion_disparo = "SHORT"
-                    
+
+                # DISPARO MULTI-ENTRY OPTIMIZADO
                 if direccion_disparo:
                     exito = abrir_posicion_con_trailing(symbol, direccion_disparo, precio_actual_15m)
                     if exito:
                         st.rerun()
                     else:
                         consola_errores.warning(f"⚠️ Exchange rechazó orden para {token_curr}. Pasando al siguiente candidato...")
-            except Exception:
+            except Exception as e: 
+                consola_errores.error(f"❌ Error al intentar abrir {token_curr}: {e}")
                 continue
                 
         if datos_consola:
             df_consola = pd.DataFrame(datos_consola)
             df_consola["Var_Abs"] = df_consola["Variación Vela (15m)"].abs()
             df_consola = df_consola.sort_values(by="Var_Abs", ascending=False).drop(columns=["Var_Abs"])
+            
             df_consola["Variación Vela (15m)"] = df_consola["Variación Vela (15m)"].map(lambda x: f"{x:+.3f}%")
             consola_monitoreo.dataframe(df_consola, width='stretch')
+
     except Exception as e:
         print(f"Error crítico en escaneo masivo: {e}")
 
