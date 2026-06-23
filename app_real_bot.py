@@ -33,7 +33,7 @@ LEVERAGE = st.sidebar.number_input("Apalancamiento (X)", min_value=1, max_value=
 VOLUMEN_MINIMO = st.sidebar.number_input("Volumen mínimo en 24h (USDT)", value=500000, step=50000)
 TRAILING_PERC = st.sidebar.slider("Trailing Stop (%)", min_value=0.5, max_value=5.0, value=1.5, step=0.1)
 
-# INICIALIZACIÓN CRÍTICA DEL ESTADO DE SESIÓN (HASTA ARRIBA)
+# INICIALIZACIÓN CRÍTICA DEL ESTADO DE SESIÓN (OBLIGATORIO AL INICIO)
 if 'operaciones_activas' not in st.session_state:
     st.session_state.operaciones_activas = {}
 if 'historial_trades' not in st.session_state:
@@ -98,27 +98,24 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         cantidad = calcular_cantidad_contratos(symbol, precio_actual)
         if cantidad <= 0: return False
         
-        # AJUSTE SEGURO DE PRECISIÓN REQUERIDO POR BINGX (SIN CORTE ENTERO TRUNCADO)
+        # Redondeo seguro adaptativo (No corta enteros drásticamente)
         try:
             cantidad_ajustada = exchange.amount_to_precision(symbol, cantidad)
             cantidad = float(cantidad_ajustada)
         except Exception as pe:
-            print(f"Error ajustando precisión para {token}: {pe}")
+            print(f"Error de precisión para {token}: {pe}")
             
         if cantidad <= 0: return False
 
-        # Configuración del apalancamiento previo
         try:
             params_leverage = {'side': direccion}
             exchange.set_leverage(int(LEVERAGE), symbol, params=params_leverage)
-            time.sleep(0.1)
+            time.sleep(0.2)
         except Exception:
             pass
             
         lado_entrada = 'buy' if direccion == 'LONG' else 'sell'
         params_entrada = { 'marginType': 'VST', 'positionSide': direccion }
-        
-        # Enviar orden de mercado con los decimales exactos requeridos
         orden_entrada = exchange.create_market_order(symbol, lado_entrada, amount=cantidad, params=params_entrada)
         
         if direccion == "LONG":
@@ -141,7 +138,7 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
         return False
 
 # =====================================================================
-# BUCLE PRINCIPAL DE EJECUCIÓN
+# BUCLE PRINCIPAL DE EJECUCIÓN (LÓGICA SEGURA LINEAL)
 # =====================================================================
 if BOT_ENCENDIDO:
     metrica_estado.success(f"🟢 BOT ENCENDIDO | Escaneando el mercado de forma segura y optimizada...")
@@ -176,7 +173,7 @@ if BOT_ENCENDIDO:
 
     dict_sincronizado = {}
 
-    # SINCRONIZACIÓN DIRECTA DESDE EXCHANGE BLINDADA (EVITA SPAM)
+    # SINCRONIZACIÓN DIRECTA DESDE EXCHANGE BLINDADA (FLEXIBLE PARA TODO TIPO DE SÍMBOLOS)
     try:
         posiciones_exchange = exchange.fetch_positions()
         if isinstance(posiciones_exchange, list):
@@ -188,9 +185,11 @@ if BOT_ENCENDIDO:
                 if cantidad_ex > 0:
                     symbol_ex = pos.get('symbol')
                     if not symbol_ex: continue
-                    token_ex = symbol_ex.split('/')[0].upper()
                     
-                    if symbol_ex in PARES_A_REVISAR:
+                    # Normalización flexible del token (Acepta cualquier diagonal o guion de altcoins)
+                    token_ex = symbol_ex.replace('-', '/').split('/')[0].upper()
+                    
+                    if 'USDT' in symbol_ex.upper():
                         direccion_ex = str(pos.get('side', '')).upper()
                         
                         precio_entrada_raw = pos.get('entryPrice')
@@ -314,19 +313,24 @@ if BOT_ENCENDIDO:
         monitor_operacion.data_editor(df_vacio, width='stretch', disabled=columnas_orden, key="editor_posiciones_vacio")
         monitor_operacion.info("Sincronizado. Sin posiciones abiertas en BingX en este momento.")
 
-    # 🔍 PASO 3: ESCANEO HÍBRIDO DE MERCADO (LÓGICA VOLUMEN DE 24H RESTAURADA)
+    # 🔍 PASO 3: ESCANEO HÍBRIDO DE MERCADO
     datos_consola = []
     try:
-        tickers = exchange.fetch_tickers(PARES_A_REVISAR)
-        pares_candidatos = []
-        for symbol in PARES_A_REVISAR:
-            if symbol in tickers:
-                var_24h = tickers[symbol]['percentage']
-                variacion_24h = float(var_24h if var_24h is not None else 0.0)
-                pares_candidatos.append((symbol, abs(variacion_24h)))
-                
-        pares_candidatos = sorted(pares_candidatos, key=lambda x: x[1], reverse=True)[:15]
-        top_15_symbols = [p[0] for p in pares_candidatos]
+        # CANDADO DE RIESGO ABSOLUTO: Bloquea la búsqueda si hay 10 o más posiciones activas
+        if len(st.session_state.operaciones_activas) >= 10:
+            consola_errores.info("🔒 Límite máximo de 10 slots alcanzado. Se suspende el escaneo para proteger las posiciones abiertas.")
+            top_15_symbols = []
+        else:
+            tickers = exchange.fetch_tickers(PARES_A_REVISAR)
+            pares_candidatos = []
+            for symbol in PARES_A_REVISAR:
+                if symbol in tickers:
+                    var_24h = tickers[symbol]['percentage']
+                    variacion_24h = float(var_24h if var_24h is not None else 0.0)
+                    pares_candidatos.append((symbol, abs(variacion_24h)))
+                    
+            pares_candidatos = sorted(pares_candidatos, key=lambda x: x[1], reverse=True)[:15]
+            top_15_symbols = [p[0] for p in pares_candidatos]
         
         for symbol in top_15_symbols:
             try:
@@ -351,6 +355,7 @@ if BOT_ENCENDIDO:
                     "Volumen 24h": f"${volumen_24h:,.0f} USD"
                 })
                 
+                # Control estricto pre-disparo
                 if token_curr in st.session_state.operaciones_activas or len(st.session_state.operaciones_activas) >= 10:
                     continue
                 if volumen_24h < VOLUMEN_MINIMO:
