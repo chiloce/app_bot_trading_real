@@ -93,7 +93,7 @@ def calcular_cantidad_contratos(symbol, precio_actual):
 
 def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
     try:
-        token = symbol.split('/')[0]
+        token = symbol.split('/')[0].upper()
         cantidad = calcular_cantidad_contratos(symbol, precio_actual)
         if cantidad == 0: return False
         
@@ -158,7 +158,7 @@ if BOT_ENCENDIDO:
 
     dict_sincronizado = {}
 
-    # SINCRONIZACIÓN DIRECTA DESDE EXCHANGE BLINDADA (CORREGIDA CON PRECIO DE ENTRADA REAL)
+    # SINCRONIZACIÓN COMPLEMENTARIA CON ROBUSTEZ PARA MÚLTIPLES FORMATOS
     try:
         posiciones_exchange = exchange.fetch_positions()
         if isinstance(posiciones_exchange, list):
@@ -168,9 +168,11 @@ if BOT_ENCENDIDO:
                 if cantidad_ex > 0:
                     symbol_ex = pos.get('symbol')
                     if not symbol_ex: continue
-                    token_ex = symbol_ex.split('/')[0]
                     
-                    if symbol_ex in PARES_A_REVISAR:
+                    # Normalización flexible para jalar cualquier altcoin de USDT de forma infalible
+                    token_ex = symbol_ex.replace('-', '/').split('/')[0].upper()
+                    
+                    if 'USDT' in symbol_ex.upper():
                         direccion_ex = pos.get('side', '').upper()
                         precio_entrada_ex = float(pos.get('entryPrice', 0))
                         precio_actual_ex = float(pos.get('markPrice', precio_entrada_ex))
@@ -178,7 +180,6 @@ if BOT_ENCENDIDO:
                         if token_ex in st.session_state.operaciones_activas:
                             dict_sincronizado[token_ex] = st.session_state.operaciones_activas[token_ex]
                         else:
-                            # CORRECCIÓN: Sincroniza usando precio_entrada_ex para evitar rangos inflados
                             if direccion_ex == "LONG":
                                 stop_sucio = precio_entrada_ex * (1 - (TRAILING_PERC / 100))
                             else:
@@ -230,7 +231,7 @@ if BOT_ENCENDIDO:
                         "Fecha/Hora": time.strftime("%Y-%m-%d %H:%M:%S"), "Par": token, "Dirección": direccion,
                         "Precio Entrada": precio_entrada, "Precio Cierre": precio_vivo, "PnL Estimado": f"{pnl:+.4f} VST"
                     })
-                    enviar_alerta(f"🏁 Trailing Stop ejecutado en LONG para {token}. Resultado: {pnl:+.2f} VST")
+                    enviar_alerta(f"🏁 Trailing Stop de Emergencia ejecutado en LONG para {token}. Resultado: {pnl:+.2f} VST")
                     necesita_rerun = True
                     
             elif direccion == "SHORT":
@@ -249,7 +250,7 @@ if BOT_ENCENDIDO:
                         "Fecha/Hora": time.strftime("%Y-%m-%d %H:%M:%S"), "Par": token, "Dirección": direccion,
                         "Precio Entrada": precio_entrada, "Precio Cierre": precio_vivo, "PnL Estimado": f"{pnl:+.4f} VST"
                     })
-                    enviar_alerta(f"🏁 Trailing Stop ejecutado en SHORT para {token}. Resultado: {pnl:+.2f} VST")
+                    enviar_alerta(f"🏁 Trailing Stop de Emergencia ejecutado en SHORT para {token}. Resultado: {pnl:+.2f} VST")
                     necesita_rerun = True
         except Exception as e:
             print(f"Error trailing: {e}")
@@ -257,7 +258,7 @@ if BOT_ENCENDIDO:
     if necesita_rerun:
         st.rerun()
 
-    # PANEL INTERACTIVO DE OPERACIONES ACTIVAS (BLINDADO)
+    # PANEL INTERACTIVO DE OPERACIONES ACTIVAS
     columnas_orden = ["Par", "Dirección", "Precio Entrada", "Cantidad", "Valor Nominal", "Trailing Stop Activo", "Precio Extremo", "Cerrar Trade"]
     
     if st.session_state.operaciones_activas:
@@ -290,26 +291,29 @@ if BOT_ENCENDIDO:
         monitor_operacion.data_editor(df_vacio, width='stretch', disabled=columnas_orden, key="editor_posiciones_vacio")
         monitor_operacion.info("Sincronizado. Sin posiciones abiertas en BingX en este momento.")
 
-    # 🔍 PASO 3: ESCANEO HÍBRIDO DE MERCADO
+    # 🔍 PASO 3: ESCANEO HÍBRIDO DE MERCADO (CANDADO DE 10 SLOTS INCLUIDO)
     datos_consola = []
     
     try:
-        tickers = exchange.fetch_tickers(PARES_A_REVISAR)
-        
-        pares_candidatos = []
-        for symbol in PARES_A_REVISAR:
-            if symbol in tickers:
-                precio_actual = float(tickers[symbol]['last'])
-                var_24h = tickers[symbol]['percentage']
-                variacion_24h = float(var_24h if var_24h is not None else 0.0)
-                pares_candidatos.append((symbol, abs(variacion_24h)))
-        
-        pares_candidatos = sorted(pares_candidatos, key=lambda x: x[1], reverse=True)[:15]
-        top_15_symbols = [p[0] for p in pares_candidatos]
+        # CANDADO ABSOLUTO EN ESCANEO: No permite buscar si ya hay 10 posiciones activas
+        if len(st.session_state.operaciones_activas) >= 10:
+            consola_errores.info("🔒 Límite máximo de 10 slots alcanzado de forma segura en el exchange. Buscador en pausa.")
+            top_15_symbols = []
+        else:
+            tickers = exchange.fetch_tickers(PARES_A_REVISAR)
+            pares_candidatos = []
+            for symbol in PARES_A_REVISAR:
+                if symbol in tickers:
+                    var_24h = tickers[symbol]['percentage']
+                    variacion_24h = float(var_24h if var_24h is not None else 0.0)
+                    pares_candidatos.append((symbol, abs(variacion_24h)))
+            
+            pares_candidatos = sorted(pares_candidatos, key=lambda x: x[1], reverse=True)[:15]
+            top_15_symbols = [p[0] for p in pares_candidatos]
 
         for symbol in top_15_symbols:
             try:
-                token_curr = symbol.split('/')[0]
+                token_curr = symbol.split('/')[0].upper()
                 precio_actual = float(tickers[symbol]['last'])
                 var_24h = tickers[symbol]['percentage']
                 variacion_24h = float(var_24h if var_24h is not None else 0.0)
