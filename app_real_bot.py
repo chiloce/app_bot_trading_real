@@ -23,10 +23,10 @@ st.set_page_config(page_title="Crypto Execution Bot (BingX)", layout="wide")
 st.title("⚡ Bot de Ejecución Automatizada Multi-Trade (BingX)")
 st.subheader("Escaneo Masivo de Alta Velocidad con Stops Blindados (Máx 10 Trades)")
 
-# CONFIGURACIÓN DE LA BARRA LATERAL
+# CONFIGURACIÓN DE LA BARRA LATERAL (OPCIONES DE 1m Y 5m AÑADIDAS)
 st.sidebar.header("⚙️ Parámetros de Trading")
 BOT_ENCENDIDO = st.sidebar.toggle("🤖 ACTIVAR BOT DE TRADING", value=False)
-TIMEFRAME = st.sidebar.selectbox("Temporalidad de Análisis", ["15m", "4h"], index=0)
+TIMEFRAME = st.sidebar.selectbox("Temporalidad de Análisis", ["1m", "5m", "15m", "4h"], index=2) # Index 2 es 15m por defecto
 UMBRAL = st.sidebar.slider("Umbral de Disparo (%)", min_value=0.01, max_value=15.0, value=5.0, step=0.01)
 MARGEN_USD = st.sidebar.number_input("Margen de Entrada (USD)", min_value=1.0, value=5.0, step=1.0)
 LEVERAGE = st.sidebar.number_input("Apalancamiento (X)", min_value=1, max_value=25, value=10, step=1)
@@ -169,7 +169,6 @@ if BOT_ENCENDIDO:
                     symbol_ex = pos.get('symbol')
                     if not symbol_ex: continue
                     
-                    # Normalización flexible para jalar cualquier altcoin de USDT de forma infalible
                     token_ex = symbol_ex.replace('-', '/').split('/')[0].upper()
                     
                     if 'USDT' in symbol_ex.upper():
@@ -295,7 +294,6 @@ if BOT_ENCENDIDO:
     datos_consola = []
     
     try:
-        # CANDADO ABSOLUTO EN ESCANEO: No permite buscar si ya hay 10 posiciones activas
         if len(st.session_state.operaciones_activas) >= 10:
             consola_errores.info("🔒 Límite máximo de 10 slots alcanzado de forma segura en el exchange. Buscador en pausa.")
             top_15_symbols = []
@@ -311,6 +309,9 @@ if BOT_ENCENDIDO:
             pares_candidatos = sorted(pares_candidatos, key=lambda x: x[1], reverse=True)[:15]
             top_15_symbols = [p[0] for p in pares_candidatos]
 
+        # COLUMNA DINÁMICA: Se adapta visualmente al TF que selecciones en la app
+        nombre_columna_vela = f"Variación Vela ({TIMEFRAME})"
+
         for symbol in top_15_symbols:
             try:
                 token_curr = symbol.split('/')[0].upper()
@@ -320,19 +321,20 @@ if BOT_ENCENDIDO:
                 v_base = tickers[symbol]['baseVolume']
                 volumen_24h = float(v_base * precio_actual if v_base is not None else 0.0)
                 
+                # Fetch usando la variable dinámica TIMEFRAME (1m, 5m, 15m, 4h)
                 velas = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=2)
                 if len(velas) < 2: continue
                 
                 vela_actual = velas[-1]
-                precio_apertura_15m = float(vela_actual[1])
-                precio_actual_15m = float(vela_actual[4])
-                variacion_vela_real = ((precio_actual_15m - precio_apertura_15m) / precio_apertura_15m) * 100
+                precio_apertura_vela = float(vela_actual[1])
+                precio_actual_vela = float(vela_actual[4])
+                variacion_vela_real = ((precio_actual_vela - precio_apertura_vela) / precio_apertura_vela) * 100
                 
                 datos_consola.append({
                     "Moneda": token_curr, 
-                    "Precio Actual": f"{precio_actual_15m} USDT",
+                    "Precio Actual": f"{precio_actual_vela} USDT",
                     "Movimiento 24h": f"{variacion_24h:+.2f}%",
-                    "Variación Vela (15m)": variacion_vela_real, 
+                    nombre_columna_vela: variacion_vela_real, 
                     "Volumen 24h": f"${volumen_24h:,.0f} USD"
                 })
                 
@@ -349,17 +351,17 @@ if BOT_ENCENDIDO:
                     direccion_disparo = "SHORT"
 
                 if direccion_disparo:
-                    if abrir_posicion_con_trailing(symbol, direccion_disparo, precio_actual_15m):
+                    if abrir_posicion_con_trailing(symbol, direccion_disparo, precio_actual_vela):
                         st.rerun()
             except Exception as e: 
                 continue
                 
         if datos_consola:
             df_consola = pd.DataFrame(datos_consola)
-            df_consola["Var_Abs"] = df_consola["Variación Vela (15m)"].abs()
+            df_consola["Var_Abs"] = df_consola[nombre_columna_vela].abs()
             df_consola = df_consola.sort_values(by="Var_Abs", ascending=False).drop(columns=["Var_Abs"])
             
-            df_consola["Variación Vela (15m)"] = df_consola["Variación Vela (15m)"].map(lambda x: f"{x:+.3f}%")
+            df_consola[nombre_columna_vela] = df_consola[nombre_columna_vela].map(lambda x: f"{x:+.3f}%")
             consola_monitoreo.dataframe(df_consola, width='stretch')
 
     except Exception as e:
