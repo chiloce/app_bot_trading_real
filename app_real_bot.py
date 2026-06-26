@@ -249,7 +249,6 @@ if BOT_ENCENDIDO:
                     if nuevo_stop > stop_actual:
                         st.session_state.operaciones_activas[token]["Trailing Stop Activo"] = nuevo_stop
                 
-                # EJECUCIÓN DEL TRAILING STOP NETO LONG
                 if precio_vivo <= stop_actual:
                     exchange.create_market_order(symbol_activo, 'sell', amount=cant, params={'marginType': 'VST', 'positionSide': 'LONG'})
                     del st.session_state.operaciones_activas[token]
@@ -273,7 +272,6 @@ if BOT_ENCENDIDO:
                     if nuevo_stop < stop_actual:
                         st.session_state.operaciones_activas[token]["Trailing Stop Activo"] = nuevo_stop
                 
-                # EJECUCIÓN DEL TRAILING STOP NETO SHORT
                 if precio_vivo >= stop_actual:
                     exchange.create_market_order(symbol_activo, 'buy', amount=cant, params={'marginType': 'VST', 'positionSide': 'SHORT'})
                     del st.session_state.operaciones_activas[token]
@@ -317,7 +315,6 @@ if BOT_ENCENDIDO:
                     exchange.create_market_order(op_detalles["Symbol_Completo"], lado_cierre, amount=op_detalles["Cantidad"], params={'marginType': 'VST', 'positionSide': op_detalles["Dirección"]})
                     del st.session_state.operaciones_activas[token_a_cerrar]
                     
-                    # Cálculo Neto para Cierres Manuales desde el DataFrame
                     if op_detalles["Dirección"] == "LONG":
                         pnl_m_bruto = (precio_cierre_manual - op_detalles["Precio Entrada"]) * op_detalles["Cantidad"]
                     else:
@@ -396,4 +393,22 @@ if BOT_ENCENDIDO:
                 
         if datos_consola:
             df_consola = pd.DataFrame(datos_consola)
-            df
+            df_consola["Var_Abs"] = df_consola[nombre_columna_vela].abs()
+            df_consola = df_consola.sort_values(by="Var_Abs", ascending=False).drop(columns=["Var_Abs"])
+            df_consola[nombre_columna_vela] = df_consola[nombre_columna_vela].map(lambda x: f"{x:+.3f}%")
+            consola_monitoreo.dataframe(df_consola, width='stretch')
+    except Exception:
+        pass
+
+# HISTORIAL Y REFRESCAR
+if st.session_state.historial_trades:
+    df_historial = pd.DataFrame(st.session_state.historial_trades)
+    tabla_historial.dataframe(df_historial, width='stretch')
+else:
+    tabla_historial.info("Aún no hay operaciones cerradas.")
+
+if BOT_ENCENDIDO:
+    time.sleep(5)
+    st.rerun()
+else:
+    metrica_estado.warning("🔴 BOT APAGADO")
