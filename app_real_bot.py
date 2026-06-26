@@ -189,6 +189,7 @@ if BOT_ENCENDIDO:
 
     dict_sincronizado = {}
 
+# SINCRONIZACIÓN COMPLEMENTARIA CON ROBUSTEZ (PNL NATIVO DEL EXCHANGE)
     try:
         posiciones_exchange = exchange.fetch_positions()
         if isinstance(posiciones_exchange, list):
@@ -205,7 +206,12 @@ if BOT_ENCENDIDO:
                         precio_entrada_ex = float(pos.get('entryPrice', 0))
                         precio_actual_ex = float(pos.get('markPrice', precio_entrada_ex))
                         
+                        # Extraemos el PNL Neto que BingX ya calculó en sus servidores
+                        pnl_nativo_exchange = float(pos.get('unrealizedPnl', 0.0))
+                        
                         if token_ex in st.session_state.operaciones_activas:
+                            # Actualizamos los datos en vivo manteniendo la estructura de la app
+                            st.session_state.operaciones_activas[token_ex]["Precio Extremo"] = float(precio_actual_ex)
                             dict_sincronizado[token_ex] = st.session_state.operaciones_activas[token_ex]
                         else:
                             if direccion_ex == "LONG":
@@ -215,13 +221,18 @@ if BOT_ENCENDIDO:
                             stop_inicial = float(exchange.price_to_precision(symbol_ex, stop_sucio))
                                 
                             dict_sincronizado[token_ex] = {
-                                "Par": token_ex, "Symbol_Completo": symbol_ex, "Dirección": direccion_ex, "Precio Entrada": precio_entrada_ex,
-                                "Cantidad": cantidad_ex, "Valor Nominal": f"${cantidad_ex * precio_entrada_ex:.1f} USD",
-                                "Trailing Stop Activo": stop_inicial, "Precio Extremo": float(precio_actual_ex)
+                                "Par": token_ex, 
+                                "Symbol_Completo": symbol_ex, 
+                                "Dirección": direccion_ex, 
+                                "Precio Entrada": precio_entrada_ex,
+                                "Cantidad": cantidad_ex, 
+                                "Valor Nominal": f"${cantidad_ex * precio_entrada_ex:.1f} USD",
+                                "Trailing Stop Activo": stop_inicial, 
+                                "Precio Extremo": float(precio_actual_ex)
                             }
             st.session_state.operaciones_activas = dict_sincronizado
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Error en ajuste de sincronización: {e}")
 
     # GESTIÓN Y MONITOR DE TRAILING STOP
     tokens_abiertos = list(st.session_state.operaciones_activas.keys())
