@@ -16,6 +16,9 @@ def enviar_alerta(mensaje):
         try: requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": mensaje})
         except Exception as e: print(f"Error Telegram: {e}")
 
+# TASA DE COMISIÓN TAKER FIJA DE BINGX (0.05% = 0.0005)
+TAKER_FEE = 0.0005
+
 # =====================================================================
 # INTERFAZ WEB (STREAMLIT)
 # =====================================================================
@@ -26,9 +29,8 @@ st.subheader("Escaneo Inteligente con Filtro Adaptativo ATR y Medición de Cuerp
 # CONFIGURACIÓN DE LA BARRA LATERAL
 st.sidebar.header("⚙️ Parámetros de Trading")
 BOT_ENCENDIDO = st.sidebar.toggle("🤖 ACTIVAR BOT DE TRADING", value=False)
-TIMEFRAME = st.sidebar.selectbox("Temporalidad de Análisis", ["1m", "5m", "15m", "4h"], index=0) # Por defecto 1m para Scalping
+TIMEFRAME = st.sidebar.selectbox("Temporalidad de Análisis", ["1m", "5m", "15m", "4h"], index=0) 
 
-# NUEVOS PARÁMETROS: ATR Y FILTRO DE IMPULSO
 MULTIPLICADOR_ATR = st.sidebar.slider("Multiplicador de Volatilidad ATR", min_value=1.5, max_value=5.0, value=2.5, step=0.1)
 UMBRAL_MINIMO_PCT = st.sidebar.slider("Umbral Mínimo de Cuerpo (%)", min_value=0.05, max_value=2.0, value=0.15, step=0.01)
 
@@ -88,30 +90,21 @@ except Exception as e:
 # CÁLCULO NATIVO DEL ATR (AVERAGE TRUE RANGE)
 # =====================================================================
 def calcular_atr_y_cuerpo(velas):
-    """
-    Calcula el ATR de los últimos 14 periodos y analiza el cuerpo de la última vela.
-    """
     df = pd.DataFrame(velas, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
     
-    # Calcular True Range (TR)
     df['prev_close'] = df['close'].shift(1)
     df['tr1'] = df['high'] - df['low']
     df['tr2'] = (df['high'] - df['prev_close']).abs()
     df['tr3'] = (df['low'] - df['prev_close']).abs()
     df['TR'] = df[['tr1', 'tr2', 'tr3']].max(axis=1)
     
-    # Promedio ATR (últimas 14 velas previas a la actual)
     atr_promedio = df['TR'].iloc[-15:-1].mean()
     
-    # Datos de la vela actual en desarrollo
     vela_actual = df.iloc[-1]
     open_act = float(vela_actual['open'])
     close_act = float(vela_actual['close'])
     
-    # Tamaño absoluto en precio del cuerpo de la vela actual
     tamano_cuerpo_precio = abs(close_act - open_act)
-    
-    # Variación porcentual estricta del CUERPO (Open a Close)
     variacion_cuerpo_pct = ((close_act - open_act) / open_act) * 100
     
     return atr_promedio, tamano_cuerpo_precio, variacion_cuerpo_pct
@@ -168,7 +161,6 @@ def abrir_posicion_con_trailing(symbol, direccion, precio_actual):
 if BOT_ENCENDIDO:
     metrica_estado.success(f"🟢 BOT ENCENDIDO | Escaneando con Filtro de Cuerpo y ATR de 14 periodos...")
     
-    # MÓDULO DE ACTUALIZACIÓN DE BALANCE (VST)
     try:
         balance = exchange.fetch_balance(params={'currency': 'VST'})
         vst_libre = float(balance.get('free', {}).get('VST', 0.0))
@@ -197,7 +189,6 @@ if BOT_ENCENDIDO:
 
     dict_sincronizado = {}
 
-    # SINCRONIZACIÓN COMPLEMENTARIA ROBUSTA
     try:
         posiciones_exchange = exchange.fetch_positions()
         if isinstance(posiciones_exchange, list):
@@ -225,7 +216,7 @@ if BOT_ENCENDIDO:
                                 
                             dict_sincronizado[token_ex] = {
                                 "Par": token_ex, "Symbol_Completo": symbol_ex, "Dirección": direccion_ex, "Precio Entrada": precio_entrada_ex,
-                                "Cantidad": candy_ex, "Valor Nominal": f"${cantidad_ex * precio_entrada_ex:.1f} USD",
+                                "Cantidad": cantidad_ex, "Valor Nominal": f"${cantidad_ex * precio_entrada_ex:.1f} USD",
                                 "Trailing Stop Activo": stop_inicial, "Precio Extremo": float(precio_actual_ex)
                             }
             st.session_state.operaciones_activas = dict_sincronizado
@@ -257,16 +248,23 @@ if BOT_ENCENDIDO:
                     nuevo_stop = float(exchange.price_to_precision(symbol_activo, nuevo_stop_sucio))
                     if nuevo_stop > stop_actual:
                         st.session_state.operaciones_activas[token]["Trailing Stop Activo"] = nuevo_stop
+                
+                # EJECUCIÓN DEL TRAILING STOP NETO LONG
                 if precio_vivo <= stop_actual:
                     exchange.create_market_order(symbol_activo, 'sell', amount=cant, params={'marginType': 'VST', 'positionSide': 'LONG'})
                     del st.session_state.operaciones_activas[token]
-                    pnl = (precio_vivo - precio_entrada) * cant
+                    
+                    pnl_bruto = (precio_vivo - precio_entrada) * cant
+                    comisiones = (precio_entrada * cant * TAKER_FEE) + (precio_vivo * cant * TAKER_FEE)
+                    pnl_neto = pnl_bruto - comisiones
+                    
                     st.session_state.historial_trades.append({
                         "Fecha/Hora": time.strftime("%Y-%m-%d %H:%M:%S"), "Par": token, "Dirección": direccion,
-                        "Precio Entrada": precio_entrada, "Precio Cierre": precio_vivo, "PnL Estimado": f"{pnl:+.4f} VST"
+                        "Precio Entrada": precio_entrada, "Precio Cierre": precio_vivo, "PnL Estimado": f"{pnl_neto:+.4f} VST"
                     })
-                    enviar_alerta(f"🏁 Trailing Stop ejecutado en LONG para {token}. Resultado: {pnl:+.2f} VST")
+                    enviar_alerta(f"🏁 Trailing Stop LONG en {token}.\nPNL Neto: {pnl_neto:+.4f} VST (Fees: -{comisiones:.4f})")
                     necesita_rerun = True
+                    
             elif direccion == "SHORT":
                 if precio_vivo < extremo_precio:
                     st.session_state.operaciones_activas[token]["Precio Extremo"] = precio_vivo
@@ -274,15 +272,21 @@ if BOT_ENCENDIDO:
                     nuevo_stop = float(exchange.price_to_precision(symbol_activo, nuevo_stop_sucio))
                     if nuevo_stop < stop_actual:
                         st.session_state.operaciones_activas[token]["Trailing Stop Activo"] = nuevo_stop
+                
+                # EJECUCIÓN DEL TRAILING STOP NETO SHORT
                 if precio_vivo >= stop_actual:
                     exchange.create_market_order(symbol_activo, 'buy', amount=cant, params={'marginType': 'VST', 'positionSide': 'SHORT'})
                     del st.session_state.operaciones_activas[token]
-                    pnl = (precio_entrada - precio_vivo) * cant
+                    
+                    pnl_bruto = (precio_entrada - precio_vivo) * cant
+                    comisiones = (precio_entrada * cant * TAKER_FEE) + (precio_vivo * cant * TAKER_FEE)
+                    pnl_neto = pnl_bruto - comisiones
+                    
                     st.session_state.historial_trades.append({
                         "Fecha/Hora": time.strftime("%Y-%m-%d %H:%M:%S"), "Par": token, "Dirección": direccion,
-                        "Precio Entrada": precio_entrada, "Precio Cierre": precio_vivo, "PnL Estimado": f"{pnl:+.4f} VST"
+                        "Precio Entrada": precio_entrada, "Precio Cierre": precio_vivo, "PnL Estimado": f"{pnl_neto:+.4f} VST"
                     })
-                    enviar_alerta(f"🏁 Trailing Stop ejecutado en SHORT para {token}. Resultado: {pnl:+.2f} VST")
+                    enviar_alerta(f"🏁 Trailing Stop SHORT en {token}.\nPNL Neto: {pnl_neto:+.4f} VST (Fees: -{comisiones:.4f})")
                     necesita_rerun = True
         except Exception:
             pass
@@ -307,11 +311,24 @@ if BOT_ENCENDIDO:
                 op_detalles = st.session_state.operaciones_activas[token_a_cerrar]
                 lado_cierre = 'sell' if op_detalles["Dirección"] == 'LONG' else 'buy'
                 try:
+                    ticker_cierre = exchange.fetch_ticker(op_detalles["Symbol_Completo"])
+                    precio_cierre_manual = float(ticker_cierre['last'])
+                    
                     exchange.create_market_order(op_detalles["Symbol_Completo"], lado_cierre, amount=op_detalles["Cantidad"], params={'marginType': 'VST', 'positionSide': op_detalles["Dirección"]})
                     del st.session_state.operaciones_activas[token_a_cerrar]
+                    
+                    # Cálculo Neto para Cierres Manuales desde el DataFrame
+                    if op_detalles["Dirección"] == "LONG":
+                        pnl_m_bruto = (precio_cierre_manual - op_detalles["Precio Entrada"]) * op_detalles["Cantidad"]
+                    else:
+                        pnl_m_bruto = (op_detalles["Precio Entrada"] - precio_cierre_manual) * op_detalles["Cantidad"]
+                        
+                    fees_m = (op_detalles["Precio Entrada"] * op_detalles["Cantidad"] * TAKER_FEE) + (precio_cierre_manual * op_detalles["Cantidad"] * TAKER_FEE)
+                    pnl_m_neto = pnl_m_bruto - fees_m
+                    
                     st.session_state.historial_trades.append({
                         "Fecha/Hora": time.strftime("%Y-%m-%d %H:%M:%S"), "Par": token_a_cerrar, "Dirección": op_detalles["Dirección"],
-                        "Precio Entrada": op_detalles["Precio Entrada"], "Precio Cierre": "Manual Web", "PnL Estimado": "Manual"
+                        "Precio Entrada": op_detalles["Precio Entrada"], "Precio Cierre": "Manual Web", "PnL Estimado": f"{pnl_m_neto:+.4f} VST"
                     })
                     st.rerun()
                 except Exception: pass
@@ -336,6 +353,8 @@ if BOT_ENCENDIDO:
                     pares_candidatos.append((symbol, abs(variacion_24h)))
             top_15_symbols = [p[0] for p in sorted(pares_candidatos, key=lambda x: x[1], reverse=True)[:15]]
 
+        nombre_columna_vela = f"Cuerpo Vela ({TIMEFRAME} %)"
+
         for symbol in top_15_symbols:
             try:
                 token_curr = symbol.split('/')[0].upper()
@@ -343,20 +362,16 @@ if BOT_ENCENDIDO:
                 v_base = tickers[symbol]['baseVolume']
                 volumen_24h = float(v_base * precio_actual if v_base is not None else 0.0)
                 
-                # Descargamos 20 velas para calcular holgadamente el ATR de 14 periodos
                 velas = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=20)
                 if len(velas) < 16: continue
                 
-                # Cálculo de la lógica de volatilidad adaptativa
                 atr_14, cuerpo_actual_precio, variacion_cuerpo_pct = calcular_atr_y_cuerpo(velas)
-                
-                # Evitar división por cero si el mercado está congelado
                 proporcion_atr = (cuerpo_actual_precio / atr_14) if atr_14 > 0 else 0.0
                 
                 datos_consola.append({
                     "Moneda": token_curr, 
                     "Precio Actual": f"{precio_actual} USDT",
-                    "Cuerpo Vela (%)": variacion_cuerpo_pct,
+                    nombre_columna_vela: variacion_cuerpo_pct,
                     "Volatilidad vs ATR": f"{proporcion_atr:.2f}x", 
                     "Volumen 24h": f"${volumen_24h:,.0f} USD"
                 })
@@ -366,9 +381,6 @@ if BOT_ENCENDIDO:
                 if volumen_24h < VOLUMEN_MINIMO:
                     continue
                 
-                # CONDICIÓN DE DISPARO INTELIGENTE:
-                # 1. El cuerpo debe ser mayor o igual al multiplicador ATR configurado (ej: 2.5x veces el ATR)
-                # 2. Debe superar el umbral porcentual mínimo estático puesto en la barra lateral para evitar micro-velas.
                 direccion_disparo = None
                 if proporcion_atr >= MULTIPLICADOR_ATR and abs(variacion_cuerpo_pct) >= UMBRAL_MINIMO_PCT:
                     if variacion_cuerpo_pct > 0:
@@ -384,22 +396,4 @@ if BOT_ENCENDIDO:
                 
         if datos_consola:
             df_consola = pd.DataFrame(datos_consola)
-            df_consola["Var_Abs"] = df_consola["Cuerpo Vela (%)"].abs()
-            df_consola = df_consola.sort_values(by="Var_Abs", ascending=False).drop(columns=["Var_Abs"])
-            df_consola["Cuerpo Vela (%)"] = df_consola["Cuerpo Vela (%)"].map(lambda x: f"{x:+.3f}%")
-            consola_monitoreo.dataframe(df_consola, width='stretch')
-    except Exception:
-        pass
-
-# HISTORIAL Y REFRESCAR
-if st.session_state.historial_trades:
-    df_historial = pd.DataFrame(st.session_state.historial_trades)
-    tabla_historial.dataframe(df_historial, width='stretch')
-else:
-    tabla_historial.info("Aún no hay operaciones cerradas.")
-
-if BOT_ENCENDIDO:
-    time.sleep(5)
-    st.rerun()
-else:
-    metrica_estado.warning("🔴 BOT APAGADO")
+            df
